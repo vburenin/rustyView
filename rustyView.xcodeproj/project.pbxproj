@@ -1,0 +1,710 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		010A8AAD9A43B4D4DC9B794B /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4BA5339895D22596DBB214E /* AppModel.swift */; };
+		05B71E44DD92D618A8E3D8CF /* WebVTT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3510B48A4A978D8E9BBF962A /* WebVTT.swift */; };
+		2AB8209998F36331DEC399A7 /* DownloadModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 421A1B23CF697FE13AA8F450 /* DownloadModels.swift */; };
+		3042C73BC5B50118C12B964E /* AuthenticatedArtworkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3673F5C5C2692BA5DF9CA44F /* AuthenticatedArtworkView.swift */; };
+		3ABB3E7F9D768BE5659DA46F /* LibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9515F38F67DE220807183DA /* LibraryModel.swift */; };
+		3ACD58B1F3F56C9D60245938 /* ServerModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CEFC195C24BA8DD8FB54ABD /* ServerModels.swift */; };
+		3E329FDF922619950D93CCB8 /* DownloadManifestStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4A0F24F81230A96490CF258 /* DownloadManifestStore.swift */; };
+		576593B10A643C06ABF9DBEC /* RustyViewApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6779520AC4A557E295C5AF4 /* RustyViewApp.swift */; };
+		60FC1B0E3316BF6D824E0D15 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C638E42BC25ABCA2BD77D42 /* KeychainStore.swift */; };
+		62FBC00ABC90A59CE6EA89A4 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0604314EC60FCDECE314D8D1 /* RootView.swift */; };
+		6841417A8BD338F915D3FCD2 /* ServerConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = D91CE8C827CEED9C07DDB418 /* ServerConnection.swift */; };
+		68FC33DF539B283FDDF12F75 /* RustyDLNAClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8275F4661FBAB081175A711 /* RustyDLNAClient.swift */; };
+		6B6D141823FDEFF4C9E9348F /* RustyViewJourneyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B38F2F219CDF5596D6907CE /* RustyViewJourneyTests.swift */; };
+		6D9EA2CC8723B883CAF3B292 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30ED0EFB5B154D1F9C1C5448 /* LibraryView.swift */; };
+		812C14F922C89451526EBE09 /* DisplayTitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46C26F925187F2BFF8ACB8D5 /* DisplayTitle.swift */; };
+		90D356C590AF968FE19E32D2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8B60547FB0DE51A5E33CD3B5 /* Assets.xcassets */; };
+		90EA21E569DCD300EFB0A84A /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F920532F96A637877D5F9AA /* AppSettings.swift */; };
+		92B53398C1B1CE1A96A33A2C /* MovieDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A37961EA0731E9B17724E589 /* MovieDetailView.swift */; };
+		99591E28E23DBAC5BE034DEA /* synthetic-playback.ts in Resources */ = {isa = PBXBuildFile; fileRef = A7F6F33F6863E7D9F2CE46BE /* synthetic-playback.ts */; };
+		9AC3FBB4FA476E5F188C5E82 /* DownloadsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DF80727CBFD68B8E3FED76A /* DownloadsView.swift */; };
+		ABC9998F50FBD6F58CD1B40D /* ConnectionSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B29666E9222FD152A51D889C /* ConnectionSetupView.swift */; };
+		AD798C446D4E7E74000CD2A6 /* PlayerViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C2EAD94F2EC3E3F7595BFFA /* PlayerViewController.swift */; };
+		B8324D9E19E28991F076C17A /* PlaybackProgressStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93C1ED2BECD57311F37BD2A6 /* PlaybackProgressStore.swift */; };
+		C54E9B15C4AFAEBE20107E03 /* PlayerScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7335FCBED5F02988A06A9BAC /* PlayerScreen.swift */; };
+		E0B008DE2C7CEA149177B3B3 /* RustyViewCoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F471FBA6C404797D50ACD9BD /* RustyViewCoreTests.swift */; };
+		E7B7D04C8D710AD71F831061 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4497D0F6A769C0CDD83F0AC7 /* SettingsView.swift */; };
+		E98C8496E54BC2EFAA9CC4C9 /* RustyViewAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4F080FA0164F2BC25A3DD0 /* RustyViewAppDelegate.swift */; };
+		F4D08B6EB0EA5EBF1C4093C2 /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 961A3F270781E5AAC664E0BC /* DownloadManager.swift */; };
+		F84570B7166CC5124FC373C5 /* PlaybackModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2E3572EA52757C12835E565 /* PlaybackModel.swift */; };
+		FC00175980EA5E72126B75CC /* synthetic-playback.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = 60749125CD163E50479EF9D6 /* synthetic-playback.mp4 */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		B2F0C26F36BCCCD74DB1CB07 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0C47832FAC11EA6598D0D649 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EC68F8D8F872E65F1F7993DA;
+			remoteInfo = rustyView;
+		};
+		EEDAE7ACB7FD24E72F1145DF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0C47832FAC11EA6598D0D649 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EC68F8D8F872E65F1F7993DA;
+			remoteInfo = rustyView;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0604314EC60FCDECE314D8D1 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		0F920532F96A637877D5F9AA /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
+		2C638E42BC25ABCA2BD77D42 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		30ED0EFB5B154D1F9C1C5448 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
+		3510B48A4A978D8E9BBF962A /* WebVTT.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebVTT.swift; sourceTree = "<group>"; };
+		3673F5C5C2692BA5DF9CA44F /* AuthenticatedArtworkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthenticatedArtworkView.swift; sourceTree = "<group>"; };
+		421A1B23CF697FE13AA8F450 /* DownloadModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadModels.swift; sourceTree = "<group>"; };
+		4497D0F6A769C0CDD83F0AC7 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		46C26F925187F2BFF8ACB8D5 /* DisplayTitle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayTitle.swift; sourceTree = "<group>"; };
+		477C81712E9EF5332608F983 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Shared.xcconfig; sourceTree = "<group>"; };
+		4C2EAD94F2EC3E3F7595BFFA /* PlayerViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerViewController.swift; sourceTree = "<group>"; };
+		5B38F2F219CDF5596D6907CE /* RustyViewJourneyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustyViewJourneyTests.swift; sourceTree = "<group>"; };
+		5DF80727CBFD68B8E3FED76A /* DownloadsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadsView.swift; sourceTree = "<group>"; };
+		60749125CD163E50479EF9D6 /* synthetic-playback.mp4 */ = {isa = PBXFileReference; path = "synthetic-playback.mp4"; sourceTree = "<group>"; };
+		68EB8E7749DFC8A254C54544 /* rustyView.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = rustyView.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		6CEFC195C24BA8DD8FB54ABD /* ServerModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerModels.swift; sourceTree = "<group>"; };
+		7335FCBED5F02988A06A9BAC /* PlayerScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerScreen.swift; sourceTree = "<group>"; };
+		8B60547FB0DE51A5E33CD3B5 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		91D0EE6C6AF885B8FFDEBA46 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		93C1ED2BECD57311F37BD2A6 /* PlaybackProgressStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackProgressStore.swift; sourceTree = "<group>"; };
+		961A3F270781E5AAC664E0BC /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
+		96E54C4F634481DB658AB7B8 /* rustyViewTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = rustyViewTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A37961EA0731E9B17724E589 /* MovieDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieDetailView.swift; sourceTree = "<group>"; };
+		A4A0F24F81230A96490CF258 /* DownloadManifestStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManifestStore.swift; sourceTree = "<group>"; };
+		A7F6F33F6863E7D9F2CE46BE /* synthetic-playback.ts */ = {isa = PBXFileReference; path = "synthetic-playback.ts"; sourceTree = "<group>"; };
+		B29666E9222FD152A51D889C /* ConnectionSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionSetupView.swift; sourceTree = "<group>"; };
+		B4BA5339895D22596DBB214E /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		BC4F080FA0164F2BC25A3DD0 /* RustyViewAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustyViewAppDelegate.swift; sourceTree = "<group>"; };
+		C6779520AC4A557E295C5AF4 /* RustyViewApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustyViewApp.swift; sourceTree = "<group>"; };
+		D91CE8C827CEED9C07DDB418 /* ServerConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerConnection.swift; sourceTree = "<group>"; };
+		D9515F38F67DE220807183DA /* LibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryModel.swift; sourceTree = "<group>"; };
+		F2E3572EA52757C12835E565 /* PlaybackModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackModel.swift; sourceTree = "<group>"; };
+		F39B53EE0A8AD5AC6B700C58 /* rustyViewUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = rustyViewUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F471FBA6C404797D50ACD9BD /* RustyViewCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustyViewCoreTests.swift; sourceTree = "<group>"; };
+		F8275F4661FBAB081175A711 /* RustyDLNAClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustyDLNAClient.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		002085E88534F42AE4E00315 /* Library */ = {
+			isa = PBXGroup;
+			children = (
+				D9515F38F67DE220807183DA /* LibraryModel.swift */,
+			);
+			path = Library;
+			sourceTree = "<group>";
+		};
+		0BDC344341C5AB55412E65A1 /* rustyViewUITests */ = {
+			isa = PBXGroup;
+			children = (
+				5B38F2F219CDF5596D6907CE /* RustyViewJourneyTests.swift */,
+				A929C29EF732F378AFC165BE /* Fixtures */,
+			);
+			path = rustyViewUITests;
+			sourceTree = "<group>";
+		};
+		183874D09BF6263BE983CB79 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				46C26F925187F2BFF8ACB8D5 /* DisplayTitle.swift */,
+				6CEFC195C24BA8DD8FB54ABD /* ServerModels.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		5CBF41FB39E0406EB76B4970 /* Downloads */ = {
+			isa = PBXGroup;
+			children = (
+				961A3F270781E5AAC664E0BC /* DownloadManager.swift */,
+				A4A0F24F81230A96490CF258 /* DownloadManifestStore.swift */,
+				421A1B23CF697FE13AA8F450 /* DownloadModels.swift */,
+			);
+			path = Downloads;
+			sourceTree = "<group>";
+		};
+		5EFE783B931EF9FE1AECF0A8 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				B4BA5339895D22596DBB214E /* AppModel.swift */,
+				0F920532F96A637877D5F9AA /* AppSettings.swift */,
+				BC4F080FA0164F2BC25A3DD0 /* RustyViewAppDelegate.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		6A91BC7F1F49DAF5F7A2C6B7 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				68EB8E7749DFC8A254C54544 /* rustyView.app */,
+				96E54C4F634481DB658AB7B8 /* rustyViewTests.xctest */,
+				F39B53EE0A8AD5AC6B700C58 /* rustyViewUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		8E01AC7718A990325C2DBC68 /* Playback */ = {
+			isa = PBXGroup;
+			children = (
+				F2E3572EA52757C12835E565 /* PlaybackModel.swift */,
+				93C1ED2BECD57311F37BD2A6 /* PlaybackProgressStore.swift */,
+				4C2EAD94F2EC3E3F7595BFFA /* PlayerViewController.swift */,
+				3510B48A4A978D8E9BBF962A /* WebVTT.swift */,
+			);
+			path = Playback;
+			sourceTree = "<group>";
+		};
+		8F116050612529CF82A43B1E = {
+			isa = PBXGroup;
+			children = (
+				C0B800BD4A933140A91F7E28 /* Config */,
+				F3C50BF56A67498613455CCC /* rustyView */,
+				F1773C067FAA3E45DDCAE7F4 /* rustyViewTests */,
+				0BDC344341C5AB55412E65A1 /* rustyViewUITests */,
+				6A91BC7F1F49DAF5F7A2C6B7 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		97C00845288C12680A3922FD /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				3673F5C5C2692BA5DF9CA44F /* AuthenticatedArtworkView.swift */,
+				B29666E9222FD152A51D889C /* ConnectionSetupView.swift */,
+				5DF80727CBFD68B8E3FED76A /* DownloadsView.swift */,
+				30ED0EFB5B154D1F9C1C5448 /* LibraryView.swift */,
+				A37961EA0731E9B17724E589 /* MovieDetailView.swift */,
+				7335FCBED5F02988A06A9BAC /* PlayerScreen.swift */,
+				0604314EC60FCDECE314D8D1 /* RootView.swift */,
+				4497D0F6A769C0CDD83F0AC7 /* SettingsView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		A929C29EF732F378AFC165BE /* Fixtures */ = {
+			isa = PBXGroup;
+			children = (
+				60749125CD163E50479EF9D6 /* synthetic-playback.mp4 */,
+				A7F6F33F6863E7D9F2CE46BE /* synthetic-playback.ts */,
+			);
+			path = Fixtures;
+			sourceTree = "<group>";
+		};
+		C0B800BD4A933140A91F7E28 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				477C81712E9EF5332608F983 /* Shared.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		D4F5A1C1082A38590DA8AC2B /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				2C638E42BC25ABCA2BD77D42 /* KeychainStore.swift */,
+				F8275F4661FBAB081175A711 /* RustyDLNAClient.swift */,
+				D91CE8C827CEED9C07DDB418 /* ServerConnection.swift */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
+		F1773C067FAA3E45DDCAE7F4 /* rustyViewTests */ = {
+			isa = PBXGroup;
+			children = (
+				F471FBA6C404797D50ACD9BD /* RustyViewCoreTests.swift */,
+			);
+			path = rustyViewTests;
+			sourceTree = "<group>";
+		};
+		F3C50BF56A67498613455CCC /* rustyView */ = {
+			isa = PBXGroup;
+			children = (
+				8B60547FB0DE51A5E33CD3B5 /* Assets.xcassets */,
+				91D0EE6C6AF885B8FFDEBA46 /* Info.plist */,
+				C6779520AC4A557E295C5AF4 /* RustyViewApp.swift */,
+				5EFE783B931EF9FE1AECF0A8 /* App */,
+				5CBF41FB39E0406EB76B4970 /* Downloads */,
+				002085E88534F42AE4E00315 /* Library */,
+				183874D09BF6263BE983CB79 /* Models */,
+				D4F5A1C1082A38590DA8AC2B /* Networking */,
+				8E01AC7718A990325C2DBC68 /* Playback */,
+				97C00845288C12680A3922FD /* Views */,
+			);
+			path = rustyView;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		21F170C3D9C874F04613CDE1 /* rustyViewTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A9F27560C02C7C989777DFBA /* Build configuration list for PBXNativeTarget "rustyViewTests" */;
+			buildPhases = (
+				CD148AFBBB14FF7DA9D4A941 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				49DFE2B68D669D0D54059842 /* PBXTargetDependency */,
+			);
+			name = rustyViewTests;
+			packageProductDependencies = (
+			);
+			productName = rustyViewTests;
+			productReference = 96E54C4F634481DB658AB7B8 /* rustyViewTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		8931DF25D30AE1C51BD8E851 /* rustyViewUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 51C0ABEBA9DEC5161A49F409 /* Build configuration list for PBXNativeTarget "rustyViewUITests" */;
+			buildPhases = (
+				AADE15D48C05682838DADD38 /* Sources */,
+				AAB374EA3CCD97DD05D328DF /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B0C3E79EE39EFE6969021344 /* PBXTargetDependency */,
+			);
+			name = rustyViewUITests;
+			packageProductDependencies = (
+			);
+			productName = rustyViewUITests;
+			productReference = F39B53EE0A8AD5AC6B700C58 /* rustyViewUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		EC68F8D8F872E65F1F7993DA /* rustyView */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 59C5DE03BAEA86E6850B41A9 /* Build configuration list for PBXNativeTarget "rustyView" */;
+			buildPhases = (
+				159F60894586C54A187F1C6E /* Sources */,
+				63403262AE46E5BA9BA70642 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = rustyView;
+			packageProductDependencies = (
+			);
+			productName = rustyView;
+			productReference = 68EB8E7749DFC8A254C54544 /* rustyView.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		0C47832FAC11EA6598D0D649 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					21F170C3D9C874F04613CDE1 = {
+						DevelopmentTeam = "$(RUSTYVIEW_DEVELOPMENT_TEAM)";
+						ProvisioningStyle = Automatic;
+					};
+					8931DF25D30AE1C51BD8E851 = {
+						DevelopmentTeam = "$(RUSTYVIEW_DEVELOPMENT_TEAM)";
+						ProvisioningStyle = Automatic;
+						TestTargetID = EC68F8D8F872E65F1F7993DA;
+					};
+					EC68F8D8F872E65F1F7993DA = {
+						DevelopmentTeam = "$(RUSTYVIEW_DEVELOPMENT_TEAM)";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 3C19D3451F6485B583D4E0C8 /* Build configuration list for PBXProject "rustyView" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 8F116050612529CF82A43B1E;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 6A91BC7F1F49DAF5F7A2C6B7 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				EC68F8D8F872E65F1F7993DA /* rustyView */,
+				21F170C3D9C874F04613CDE1 /* rustyViewTests */,
+				8931DF25D30AE1C51BD8E851 /* rustyViewUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		63403262AE46E5BA9BA70642 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				90D356C590AF968FE19E32D2 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AAB374EA3CCD97DD05D328DF /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FC00175980EA5E72126B75CC /* synthetic-playback.mp4 in Resources */,
+				99591E28E23DBAC5BE034DEA /* synthetic-playback.ts in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		159F60894586C54A187F1C6E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				010A8AAD9A43B4D4DC9B794B /* AppModel.swift in Sources */,
+				90EA21E569DCD300EFB0A84A /* AppSettings.swift in Sources */,
+				3042C73BC5B50118C12B964E /* AuthenticatedArtworkView.swift in Sources */,
+				ABC9998F50FBD6F58CD1B40D /* ConnectionSetupView.swift in Sources */,
+				812C14F922C89451526EBE09 /* DisplayTitle.swift in Sources */,
+				F4D08B6EB0EA5EBF1C4093C2 /* DownloadManager.swift in Sources */,
+				3E329FDF922619950D93CCB8 /* DownloadManifestStore.swift in Sources */,
+				2AB8209998F36331DEC399A7 /* DownloadModels.swift in Sources */,
+				9AC3FBB4FA476E5F188C5E82 /* DownloadsView.swift in Sources */,
+				60FC1B0E3316BF6D824E0D15 /* KeychainStore.swift in Sources */,
+				3ABB3E7F9D768BE5659DA46F /* LibraryModel.swift in Sources */,
+				6D9EA2CC8723B883CAF3B292 /* LibraryView.swift in Sources */,
+				92B53398C1B1CE1A96A33A2C /* MovieDetailView.swift in Sources */,
+				F84570B7166CC5124FC373C5 /* PlaybackModel.swift in Sources */,
+				B8324D9E19E28991F076C17A /* PlaybackProgressStore.swift in Sources */,
+				C54E9B15C4AFAEBE20107E03 /* PlayerScreen.swift in Sources */,
+				AD798C446D4E7E74000CD2A6 /* PlayerViewController.swift in Sources */,
+				62FBC00ABC90A59CE6EA89A4 /* RootView.swift in Sources */,
+				68FC33DF539B283FDDF12F75 /* RustyDLNAClient.swift in Sources */,
+				576593B10A643C06ABF9DBEC /* RustyViewApp.swift in Sources */,
+				E98C8496E54BC2EFAA9CC4C9 /* RustyViewAppDelegate.swift in Sources */,
+				6841417A8BD338F915D3FCD2 /* ServerConnection.swift in Sources */,
+				3ACD58B1F3F56C9D60245938 /* ServerModels.swift in Sources */,
+				E7B7D04C8D710AD71F831061 /* SettingsView.swift in Sources */,
+				05B71E44DD92D618A8E3D8CF /* WebVTT.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AADE15D48C05682838DADD38 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6B6D141823FDEFF4C9E9348F /* RustyViewJourneyTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CD148AFBBB14FF7DA9D4A941 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E0B008DE2C7CEA149177B3B3 /* RustyViewCoreTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		49DFE2B68D669D0D54059842 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EC68F8D8F872E65F1F7993DA /* rustyView */;
+			targetProxy = EEDAE7ACB7FD24E72F1145DF /* PBXContainerItemProxy */;
+		};
+		B0C3E79EE39EFE6969021344 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EC68F8D8F872E65F1F7993DA /* rustyView */;
+			targetProxy = B2F0C26F36BCCCD74DB1CB07 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		09070B562A80725344623D4F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 477C81712E9EF5332608F983 /* Shared.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(RUSTYVIEW_BUNDLE_ID).tests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/rustyView.app/rustyView";
+			};
+			name = Debug;
+		};
+		43BA1295920109E51C4E6013 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 477C81712E9EF5332608F983 /* Shared.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(RUSTYVIEW_BUNDLE_ID).tests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/rustyView.app/rustyView";
+			};
+			name = Release;
+		};
+		499992716D991A6A7350DCA0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 477C81712E9EF5332608F983 /* Shared.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = rustyView/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(RUSTYVIEW_BUNDLE_ID)";
+				PRODUCT_NAME = rustyView;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		5C5ED8DA3735678903861C66 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 477C81712E9EF5332608F983 /* Shared.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(RUSTYVIEW_BUNDLE_ID).uitests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = rustyView;
+			};
+			name = Release;
+		};
+		6741B80FA869CCEE669B6C7B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "$(RUSTYVIEW_DEVELOPMENT_TEAM)";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		81F638FED7E450F64FCE0882 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 477C81712E9EF5332608F983 /* Shared.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(RUSTYVIEW_BUNDLE_ID).uitests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = rustyView;
+			};
+			name = Debug;
+		};
+		918CA7FC4085CF73E2FB7489 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "$(RUSTYVIEW_DEVELOPMENT_TEAM)";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		AD046E0B693C41F7ABA95316 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 477C81712E9EF5332608F983 /* Shared.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = rustyView/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(RUSTYVIEW_BUNDLE_ID)";
+				PRODUCT_NAME = rustyView;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		3C19D3451F6485B583D4E0C8 /* Build configuration list for PBXProject "rustyView" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6741B80FA869CCEE669B6C7B /* Debug */,
+				918CA7FC4085CF73E2FB7489 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		51C0ABEBA9DEC5161A49F409 /* Build configuration list for PBXNativeTarget "rustyViewUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				81F638FED7E450F64FCE0882 /* Debug */,
+				5C5ED8DA3735678903861C66 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		59C5DE03BAEA86E6850B41A9 /* Build configuration list for PBXNativeTarget "rustyView" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AD046E0B693C41F7ABA95316 /* Debug */,
+				499992716D991A6A7350DCA0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A9F27560C02C7C989777DFBA /* Build configuration list for PBXNativeTarget "rustyViewTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				09070B562A80725344623D4F /* Debug */,
+				43BA1295920109E51C4E6013 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 0C47832FAC11EA6598D0D649 /* Project object */;
+}

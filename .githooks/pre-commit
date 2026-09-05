@@ -1,0 +1,4 @@
+#!/bin/sh
+
+repository_root=$(git rev-parse --show-toplevel) || exit 2
+exec "$repository_root/scripts/privacy_check.sh" --staged

@@ -1,0 +1,6 @@
+// Safe source-controlled defaults. Private deployment identity belongs in the
+// optional, repository-root Local.xcconfig included below.
+RUSTYVIEW_BUNDLE_ID = com.example.rustyView
+RUSTYVIEW_DEVELOPMENT_TEAM =
+
+#include? "../Local.xcconfig"

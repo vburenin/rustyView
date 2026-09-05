@@ -1,0 +1,5 @@
+# Copy this file to .privacy-denylist and add one literal private identifier per
+# line. The real denylist is ignored by Git. Useful entries include a private
+# hostname, server address, account name, bundle-ID prefix, or internal IP.
+private-media.example.test
+private-account-name
