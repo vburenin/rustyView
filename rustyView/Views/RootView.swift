@@ -10,6 +10,7 @@ struct RootView: View {
             NavigationStack {
                 LibraryView()
             }
+            .id("\(app.client.connection?.baseURL.absoluteString ?? "")|\(app.client.connection?.username ?? "")")
             .tabItem { Label("Library", systemImage: "rectangle.stack.fill") }
             .tag(AppTab.library)
 
@@ -38,8 +39,8 @@ struct RootView: View {
             if configured { selectedTab = .library }
         }
         .sheet(isPresented: $showingSetup) {
-            ConnectionSetupView(canDismiss: app.isConfigured)
-                .interactiveDismissDisabled(!app.isConfigured)
+            ConnectionSetupView(canDismiss: app.isConfigured || !app.downloads.completed.isEmpty)
+                .interactiveDismissDisabled(!app.isConfigured && app.downloads.completed.isEmpty)
         }
         .fullScreenCover(isPresented: Binding(
             get: { app.player.isPresented },

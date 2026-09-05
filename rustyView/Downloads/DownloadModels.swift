@@ -198,6 +198,7 @@ enum DownloadResponseValidator {
 }
 
 enum DownloadRetryPolicy {
+    static let maximumAttempts = 6
     static func isRetryable(_ error: Error) -> Bool {
         let error = error as NSError
         guard error.domain == NSURLErrorDomain else { return false }

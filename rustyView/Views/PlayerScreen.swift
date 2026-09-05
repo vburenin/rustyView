@@ -3,6 +3,7 @@ import SwiftUI
 
 struct PlayerScreen: View {
     @EnvironmentObject private var app: AppModel
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @State private var showingDetails = false
     @State private var controlsVisible = true
     @State private var isScrubbing = false
@@ -93,6 +94,10 @@ struct PlayerScreen: View {
         }
         .onChange(of: app.player.isPreparing) { _, preparing in
             if !preparing { scheduleAutoHide() }
+        }
+        .onChange(of: voiceOverEnabled) { _, enabled in
+            if enabled { controlsVisible = true }
+            scheduleAutoHide()
         }
         .sheet(isPresented: $showingDetails) {
             if let item = app.player.item {
@@ -416,7 +421,7 @@ struct PlayerScreen: View {
 
     private func scheduleAutoHide() {
         autoHideTask?.cancel()
-        guard app.player.isPlaying, !isScrubbing, app.player.errorMessage == nil else { return }
+        guard !voiceOverEnabled, app.player.isPlaying, !isScrubbing, app.player.errorMessage == nil else { return }
         autoHideTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled, app.player.isPlaying, !isScrubbing else { return }
@@ -664,12 +669,7 @@ private struct PlaybackOptionsView: View {
                         }
                     }
                     Button("Apply Streaming Changes") {
-                        app.player.play(
-                            item,
-                            mode: app.player.mode,
-                            quality: app.player.selectedQuality,
-                            audioIndex: app.player.selectedAudioIndex
-                        )
+                        app.player.applyStreamingChanges()
                         dismiss()
                     }
                 }

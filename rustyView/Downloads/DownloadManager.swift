@@ -5,6 +5,8 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate {
     let store: DownloadManifestStore
     private let lock = NSLock()
     private var currentConnection: ServerConnection?
+    private var discardedTasks: Set<Int> = []
+    private var installedRecords: [Int: DownloadRecord] = [:]
 
     init(store: DownloadManifestStore) {
         self.store = store
@@ -20,6 +22,38 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate {
         lock.lock()
         defer { lock.unlock() }
         return currentConnection
+    }
+
+    func discard(taskIdentifier: Int) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if let record = installedRecords[taskIdentifier] {
+            try store.delete(record)
+            installedRecords.removeValue(forKey: taskIdentifier)
+        }
+        discardedTasks.insert(taskIdentifier)
+    }
+
+    func install(temporaryURL: URL, metadata: DownloadTaskMetadata, taskIdentifier: Int) throws -> DownloadRecord? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !discardedTasks.contains(taskIdentifier) else { return nil }
+        let record = try store.install(temporaryURL: temporaryURL, metadata: metadata)
+        installedRecords[taskIdentifier] = record
+        return record
+    }
+
+    func acceptCompletion(taskIdentifier: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        installedRecords.removeValue(forKey: taskIdentifier)
+        return !discardedTasks.contains(taskIdentifier)
+    }
+
+    func isDiscarded(taskIdentifier: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return discardedTasks.contains(taskIdentifier)
     }
 
     func urlSession(
@@ -73,7 +107,8 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate {
             owner?.update(taskIdentifier: downloadTask.taskIdentifier, phase: .finishing)
         }
         do {
-            let record = try store.install(temporaryURL: location, metadata: metadata)
+            guard let record = try install(temporaryURL: location, metadata: metadata,
+                                           taskIdentifier: downloadTask.taskIdentifier) else { return }
             Task { @MainActor [weak owner] in
                 owner?.finish(taskIdentifier: downloadTask.taskIdentifier, record: record)
             }
@@ -117,20 +152,13 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate {
             completionHandler(.performDefaultHandling, nil)
             return
         }
-        let method = challenge.protectionSpace.authenticationMethod
-        let challengeURL = URL(
-            string: "\(challenge.protectionSpace.protocol ?? "https")://\(challenge.protectionSpace.host):\(challenge.protectionSpace.port)"
-        )
-        guard (method == NSURLAuthenticationMethodHTTPBasic || method == NSURLAuthenticationMethodHTTPDigest),
-              challenge.previousFailureCount == 0,
-              let challengeURL,
-              connection.origin.matches(challengeURL) else {
+        guard let credential = ServerAuthenticationPolicy.credential(for: challenge, connection: connection) else {
             completionHandler(.performDefaultHandling, nil)
             return
         }
         completionHandler(
             .useCredential,
-            URLCredential(user: connection.username, password: connection.password, persistence: .forSession)
+            credential
         )
     }
 
@@ -195,6 +223,7 @@ final class DownloadManager: ObservableObject {
     }
 
     func configure(connection: ServerConnection?, statusClient: RustyDLNAClient? = nil) {
+        stopAllProgressTracking()
         self.connection = connection
         self.statusClient = statusClient
         delegate.update(connection: connection)
@@ -203,7 +232,11 @@ final class DownloadManager: ObservableObject {
             return
         }
         session.getAllTasks { [weak self] tasks in
-            Task { @MainActor in self?.restore(tasks: tasks) }
+            Task { @MainActor in
+                guard let self else { return }
+                self.restore(tasks: tasks)
+                for download in self.active { self.startProgressTracking(for: download) }
+            }
         }
     }
 
@@ -284,7 +317,12 @@ final class DownloadManager: ObservableObject {
     }
 
     func cancel(_ download: ActiveDownload) {
+        guard active.contains(where: { $0.id == download.id && $0.taskIdentifier == download.taskIdentifier }) else { return }
         let identifier = download.taskIdentifier
+        do { try delegate.discard(taskIdentifier: identifier) } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
         let compatiblePath = download.kind == .compatible ? download.metadata.serverPath : nil
         let client = statusClient
         active.removeAll { $0.id == download.id }
@@ -292,11 +330,15 @@ final class DownloadManager: ObservableObject {
         session.getAllTasks { tasks in
             tasks.first { $0.taskIdentifier == identifier }?.cancel()
         }
-        if let compatiblePath, let client {
+        if let compatiblePath, let client,
+           let connection = client.connection,
+           download.serverOrigin == connection.baseURL.absoluteString {
+            let cancellationClient = client.connectionProbe()
+            cancellationClient.configure(connection)
             Task {
                 // Cancelling the transfer does not necessarily stop a server-side
                 // producer immediately. Release this exact generation explicitly.
-                try? await client.cancelTranscode(
+                try? await cancellationClient.cancelTranscode(
                     mediaID: download.mediaID,
                     compatiblePath: compatiblePath
                 )
@@ -306,11 +348,16 @@ final class DownloadManager: ObservableObject {
 
     func retry(_ download: ActiveDownload) {
         guard let index = active.firstIndex(where: { $0.id == download.id }) else { return }
+        guard case .failed = active[index].phase else { return }
         do {
-            let task = try makeTask(metadata: active[index].metadata, scheduledAt: nil)
+            var metadata = active[index].metadata
+            metadata.retryAttempt = 0
+            let task = try makeTask(metadata: metadata, scheduledAt: nil)
+            active[index].metadata = metadata
             active[index].taskIdentifier = task.taskIdentifier
             active[index].phase = .queued
             task.resume()
+            startProgressTracking(for: active[index])
         } catch {
             active[index].phase = .failed(message: error.localizedDescription)
         }
@@ -327,12 +374,14 @@ final class DownloadManager: ObservableObject {
                         continue
                     }
                     let metadata = self.active[index].metadata
-                    task.cancel()
                     do {
+                        try self.delegate.discard(taskIdentifier: task.taskIdentifier)
+                        task.cancel()
                         let replacement = try self.makeTask(metadata: metadata, scheduledAt: nil)
                         self.active[index].taskIdentifier = replacement.taskIdentifier
                         self.active[index].phase = .queued
                         replacement.resume()
+                        self.startProgressTracking(for: self.active[index])
                     } catch {
                         self.active[index].phase = .failed(message: error.localizedDescription)
                     }
@@ -386,7 +435,13 @@ final class DownloadManager: ObservableObject {
         }
 
         var metadata = active[index].metadata
-        let attempt = (metadata.retryAttempt ?? 0) + 1
+        let previousAttempt = max(0, metadata.retryAttempt ?? 0)
+        guard previousAttempt < DownloadRetryPolicy.maximumAttempts else {
+            active[index].phase = .failed(message: "The download could not finish after several attempts. Try again when your connection is available.")
+            stopProgressTracking(for: active[index].id)
+            return
+        }
+        let attempt = previousAttempt + 1
         metadata.retryAttempt = attempt
         let delay = DownloadRetryPolicy.delay(forAttempt: attempt)
         let scheduledAt = Date().addingTimeInterval(delay)
@@ -396,12 +451,14 @@ final class DownloadManager: ObservableObject {
             active[index].taskIdentifier = task.taskIdentifier
             active[index].phase = .retrying(attempt: attempt, scheduledAt: scheduledAt, reason: message)
             task.resume()
+            startProgressTracking(for: active[index])
         } catch {
             active[index].phase = .failed(message: error.localizedDescription)
         }
     }
 
     func finish(taskIdentifier: Int, record: DownloadRecord) {
+        guard delegate.acceptCompletion(taskIdentifier: taskIdentifier) else { return }
         if let id = active.first(where: { $0.taskIdentifier == taskIdentifier })?.id {
             stopProgressTracking(for: id)
         }
@@ -420,6 +477,8 @@ final class DownloadManager: ObservableObject {
         claimed.formUnion(active.map { DownloadIdentity(serverOrigin: $0.serverOrigin, mediaID: $0.mediaID) })
 
         for task in tasks {
+            guard task.state != .canceling, task.state != .completed,
+                  !delegate.isDiscarded(taskIdentifier: task.taskIdentifier) else { continue }
             if active.contains(where: { $0.taskIdentifier == task.taskIdentifier }) { continue }
             guard let description = task.taskDescription,
                   let data = description.data(using: .utf8),
@@ -472,16 +531,19 @@ final class DownloadManager: ObservableObject {
 
     private func startProgressTracking(for download: ActiveDownload) {
         guard download.kind == .compatible,
+              download.serverOrigin == connection?.baseURL.absoluteString,
               download.metadata.durationSeconds.map({ $0 > 0 }) == true,
               download.metadata.serverPath != nil,
               let client = statusClient else {
             return
         }
+        if case .failed = download.phase { return }
         progressPollers[download.id]?.cancel()
         progressPollers[download.id] = Task { [weak self, weak client] in
             while !Task.isCancelled {
                 guard let client,
                       let current = self?.active.first(where: { $0.id == download.id }),
+                      current.serverOrigin == client.connection?.baseURL.absoluteString,
                       let serverPath = current.metadata.serverPath else {
                     return
                 }
@@ -490,6 +552,8 @@ final class DownloadManager: ObservableObject {
                         mediaID: current.mediaID,
                         compatiblePath: serverPath
                     )
+                    guard !Task.isCancelled,
+                          self?.active.contains(where: { $0.id == current.id && $0.taskIdentifier == current.taskIdentifier }) == true else { return }
                     if let produced = status.producedSeconds,
                        let progress = DownloadPreparationProgress(
                            producedSeconds: produced,

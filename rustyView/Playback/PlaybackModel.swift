@@ -190,6 +190,10 @@ final class PlaybackModel: ObservableObject {
     private var authenticatedAsset: AuthenticatedMediaAsset?
     private var startupWatchdog: Task<Void, Never>?
     private var startupRetryCount = 0
+    private var captionRequest = UUID()
+    private var isApplyingInitialSeek = false
+    private enum Intent { case playing, paused }
+    private var intent = Intent.paused
 
     init(client: RustyDLNAClient, progressStore: PlaybackProgressStore = PlaybackProgressStore()) {
         self.client = client
@@ -220,11 +224,17 @@ final class PlaybackModel: ObservableObject {
         continuingAutomaticFallback: Bool = false,
         startupRetryCount: Int = 0
     ) {
+        saveProgress()
         startupWatchdog?.cancel()
-        let sameItem = self.item?.id == item.id
+        let sameItem = self.item?.id == item.id && activeServerOrigin == client.connection?.baseURL.absoluteString
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        authenticatedAsset = nil
+        isApplyingInitialSeek = false
         currentSession = UUID()
         let session = currentSession
         self.item = item
+        intent = .playing
         currentTitle = item.displayTitle
         self.mode = mode
         automaticFallbackEnabled = mode == .automatic || continuingAutomaticFallback
@@ -242,6 +252,7 @@ final class PlaybackModel: ObservableObject {
         bufferedTime = 0
         hasEnded = false
         if !sameItem {
+            captionRequest = UUID()
             selectedCaptionIndex = nil
             subtitleCues = []
             currentSubtitle = nil
@@ -251,7 +262,9 @@ final class PlaybackModel: ObservableObject {
         let savedPosition = activeServerOrigin.flatMap {
             progressStore.resumePosition(serverOrigin: $0, mediaID: item.id)
         }
-        let startPosition = max(0, explicitStart ?? savedPosition ?? 0)
+        let startPosition = PlaybackTimeline.clampedTime(explicitStart ?? savedPosition ?? 0, duration: activeDuration)
+        currentTime = startPosition
+        streamOffset = 0
         currentChapterIndex = PlaybackTimeline.activeChapterIndex(
             in: item.chapters,
             at: startPosition
@@ -314,6 +327,14 @@ final class PlaybackModel: ObservableObject {
         )
     }
 
+    func applyStreamingChanges() {
+        guard let item else { return }
+        let position = globalTime
+        let wasPlaying = intent == .playing
+        play(item, mode: mode, quality: selectedQuality, audioIndex: selectedAudioIndex, startAt: position)
+        if !wasPlaying { pausePlayback() }
+    }
+
     var retryLabel: String? {
         guard let item, let attempt = PlaybackRouting.nextFallback(
             after: activeAttempt,
@@ -325,7 +346,7 @@ final class PlaybackModel: ObservableObject {
     func selectAudio(_ index: Int) {
         guard let item, index != selectedAudioIndex else { return }
         let position = globalTime
-        let wasPlaying = player.rate > 0
+        let wasPlaying = intent == .playing
         saveProgress()
         selectedAudioIndex = index
         let selectedMode: PlaybackMode = activeAttempt == .portable ? .portable : .compatible
@@ -337,11 +358,13 @@ final class PlaybackModel: ObservableObject {
             startAt: position,
             continuingAutomaticFallback: true
         )
-        if !wasPlaying { player.pause() }
+        if !wasPlaying { pausePlayback() }
     }
 
     func togglePlayback() {
-        if isPlaying || player.rate > 0 {
+        if hasEnded {
+            resumePlayback()
+        } else if intent == .playing {
             pausePlayback()
         } else {
             resumePlayback()
@@ -349,11 +372,13 @@ final class PlaybackModel: ObservableObject {
     }
 
     private func pausePlayback() {
+        intent = .paused
         player.pause()
         saveProgress()
     }
 
     private func resumePlayback() {
+        intent = .playing
         if hasEnded {
             restartAfterEnd()
         } else {
@@ -391,7 +416,7 @@ final class PlaybackModel: ObservableObject {
         let target = PlaybackTimeline.clampedTime(target, duration: duration > 0 ? duration : nil)
         hasEnded = false
         currentTime = target
-        let wasPlaying = player.rate > 0
+        let wasPlaying = intent == .playing
         if let localTime = PlaybackTimeline.localTime(
             forGlobalTime: target,
             streamOffset: streamOffset
@@ -414,10 +439,12 @@ final class PlaybackModel: ObservableObject {
             startAt: max(0, target),
             continuingAutomaticFallback: automaticFallbackEnabled
         )
-        if !wasPlaying { player.pause() }
+        if !wasPlaying { pausePlayback() }
     }
 
     func selectCaption(_ index: Int?) async {
+        captionRequest = UUID()
+        let request = captionRequest
         selectedCaptionIndex = index
         subtitleCues = []
         currentSubtitle = nil
@@ -431,11 +458,14 @@ final class PlaybackModel: ObservableObject {
             return
         }
         do {
-            subtitleCues = try WebVTTParser.parse(try await client.data(serverPath: path))
+            let cues = try WebVTTParser.parse(try await client.data(serverPath: path))
+            guard request == captionRequest, !Task.isCancelled else { return }
+            subtitleCues = cues
             updateSubtitle(at: globalTime)
         } catch is CancellationError {
             return
         } catch {
+            guard request == captionRequest, !Task.isCancelled else { return }
             subtitleError = error.localizedDescription
             selectedCaptionIndex = nil
         }
@@ -447,6 +477,19 @@ final class PlaybackModel: ObservableObject {
     }
 
     func playLocal(record: DownloadRecord, url: URL) {
+        saveProgress()
+        intent = .playing
+        startupWatchdog?.cancel()
+        authenticatedAsset = nil
+        activeAttempt = .original
+        automaticFallbackEnabled = false
+        isApplyingInitialSeek = false
+        captionRequest = UUID()
+        selectedCaptionIndex = nil
+        subtitleCues = []
+        currentSubtitle = nil
+        subtitleError = nil
+        selectedAudioIndex = nil
         currentSession = UUID()
         item = nil
         mode = .original
@@ -467,6 +510,14 @@ final class PlaybackModel: ObservableObject {
             serverOrigin: record.serverOrigin,
             mediaID: record.mediaID
         )
+        currentTime = resume ?? 0
+        do { try activateAudioSession() } catch {
+            player.pause()
+            player.replaceCurrentItem(with: nil)
+            isPreparing = false
+            errorMessage = error.localizedDescription
+            return
+        }
         let playerItem = AVPlayerItem(url: url)
         observe(playerItem, session: currentSession, initialSeek: resume)
         player.replaceCurrentItem(with: playerItem)
@@ -477,6 +528,14 @@ final class PlaybackModel: ObservableObject {
 
     func stop() {
         saveProgress()
+        intent = .paused
+        activeServerOrigin = nil
+        activeMediaID = nil
+        activeDuration = 0
+        streamOffset = 0
+        lastProgressSave = 0
+        isApplyingInitialSeek = false
+        captionRequest = UUID()
         currentSession = UUID()
         player.pause()
         player.replaceCurrentItem(with: nil)
@@ -515,9 +574,16 @@ final class PlaybackModel: ObservableObject {
                     let itemDuration = playerItem?.duration.seconds ?? 0
                     if self.duration <= 0, itemDuration.isFinite, itemDuration > 0 {
                         self.duration = itemDuration + self.streamOffset
+                        self.activeDuration = self.duration
                     }
                     if let initialSeek, initialSeek > 0 {
-                        self.player.seek(to: CMTime(seconds: initialSeek, preferredTimescale: 600))
+                        self.isApplyingInitialSeek = true
+                        self.player.seek(to: CMTime(seconds: initialSeek, preferredTimescale: 600)) { [weak self] _ in
+                            Task { @MainActor in
+                                guard let self, self.currentSession == session else { return }
+                                self.isApplyingInitialSeek = false
+                            }
+                        }
                     }
                 case .failed:
                     self.handlePlaybackFailure(
@@ -547,6 +613,7 @@ final class PlaybackModel: ObservableObject {
                       let origin = self.activeServerOrigin,
                       let mediaID = self.activeMediaID else { return }
                 self.hasEnded = true
+                self.intent = .paused
                 self.isPlaying = false
                 self.progressStore.clear(serverOrigin: origin, mediaID: mediaID)
             }
@@ -567,10 +634,11 @@ final class PlaybackModel: ObservableObject {
             return
         }
         currentTime = 0
+        let session = currentSession
         player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
             guard finished else { return }
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self, self.currentSession == session else { return }
                 self.player.playImmediately(atRate: self.playbackSpeed)
             }
         }
@@ -622,6 +690,7 @@ final class PlaybackModel: ObservableObject {
     }
 
     private var globalTime: Double {
+        if isPreparing || isApplyingInitialSeek { return currentTime }
         let local = player.currentTime().seconds
         return (local.isFinite ? max(0, local) : 0) + streamOffset
     }
@@ -681,7 +750,9 @@ final class PlaybackModel: ObservableObject {
     }
 
     private func saveProgress() {
-        guard let origin = activeServerOrigin, let mediaID = activeMediaID else { return }
+        guard !isPreparing, !isApplyingInitialSeek, !hasEnded,
+              player.currentItem?.status == .readyToPlay,
+              let origin = activeServerOrigin, let mediaID = activeMediaID else { return }
         progressStore.update(
             serverOrigin: origin,
             mediaID: mediaID,
@@ -710,6 +781,7 @@ final class PlaybackModel: ObservableObject {
                     session: session
                 )
             case .retry:
+                let wasPlaying = self.intent == .playing
                 self.play(
                     item,
                     mode: self.mode,
@@ -719,6 +791,7 @@ final class PlaybackModel: ObservableObject {
                     continuingAutomaticFallback: self.automaticFallbackEnabled,
                     startupRetryCount: self.startupRetryCount + 1
                 )
+                if !wasPlaying { self.pausePlayback() }
             case .fail:
                 self.player.pause()
                 self.isPreparing = false
@@ -729,6 +802,8 @@ final class PlaybackModel: ObservableObject {
 
     private func handlePlaybackFailure(_ message: String, session: UUID) {
         guard currentSession == session else { return }
+        let position = globalTime
+        let wasPlaying = intent == .playing
         startupWatchdog?.cancel()
         isPreparing = false
         if automaticFallbackEnabled,
@@ -737,7 +812,6 @@ final class PlaybackModel: ObservableObject {
                after: activeAttempt,
                videoMode: PlaybackCompatibility.videoMode(for: item)
            ) {
-            let position = globalTime
             errorMessage = nextAttempt == .portable
                 ? "Trying maximum compatibility…"
                 : "Trying a compatible stream…"
@@ -749,7 +823,9 @@ final class PlaybackModel: ObservableObject {
                 startAt: position,
                 continuingAutomaticFallback: true
             )
+            if !wasPlaying { pausePlayback() }
         } else {
+            intent = .paused
             errorMessage = message
         }
     }

@@ -11,15 +11,21 @@ final class AppModel: ObservableObject {
 
     @Published private(set) var isConfigured = false
     @Published var presentedError: UserFacingError?
+    @Published var connectionError: UserFacingError?
     private var childObservers: Set<AnyCancellable> = []
+    private var connectionEpoch = 0
 
-    init() {
+    init(settings suppliedSettings: AppSettings? = nil, client suppliedClient: RustyDLNAClient? = nil,
+         downloads suppliedDownloads: DownloadManager? = nil) {
         let environment = ProcessInfo.processInfo.environment
-        let settings = AppSettings()
-        let client = RustyDLNAClient()
+        let settings = suppliedSettings ?? AppSettings()
+        let client = suppliedClient ?? RustyDLNAClient()
         self.settings = settings
         self.client = client
         library = LibraryModel(client: client)
+        if let suppliedDownloads {
+            downloads = suppliedDownloads
+        } else {
         #if DEBUG
         if environment["RUSTYVIEW_TEST_SERVER"] != nil,
            let testNamespace = environment["RUSTYVIEW_TEST_NAMESPACE"],
@@ -42,6 +48,7 @@ final class AppModel: ObservableObject {
         #else
         downloads = DownloadManager(allowsCellularDownloads: settings.allowCellularDownloads)
         #endif
+        }
         player = PlaybackModel(client: client)
 
         Publishers.MergeMany([
@@ -82,39 +89,41 @@ final class AppModel: ObservableObject {
     }
 
     func connect(serverAddress: String, username: String, password: String) async -> Bool {
+        connectionEpoch += 1
+        connectionError = nil
+        let epoch = connectionEpoch
         do {
-            let effectivePassword = password.isEmpty && settings.hasSavedConnection
-                ? settings.savedPassword
-                : password
+            let effectivePassword = try settings.passwordForConnection(
+                serverAddress: serverAddress, username: username, enteredPassword: password
+            )
             let candidate = try ServerConnection(
                 serverAddress: serverAddress,
                 username: username,
                 password: effectivePassword
             )
-            let previous = client.connection
-            client.configure(candidate)
-            do {
-                try await library.reload()
-            } catch {
-                client.configure(previous)
-                downloads.configure(connection: previous, statusClient: client)
-                isConfigured = previous != nil
-                throw error
-            }
+            let probe = client.connectionProbe()
+            probe.configure(candidate)
+            let page = try await probe.library(LibraryRequest())
+            try Task.checkCancellation()
+            guard epoch == connectionEpoch else { return false }
             let saved = try settings.save(
                 serverAddress: serverAddress,
                 username: username,
                 password: effectivePassword
             )
+            player.stop()
             apply(saved)
+            library.replaceWithVerifiedPage(page)
             return true
         } catch {
-            presentedError = UserFacingError(error)
+            guard epoch == connectionEpoch, !Task.isCancelled else { return false }
+            connectionError = UserFacingError(error)
             return false
         }
     }
 
     func disconnect() {
+        connectionEpoch += 1
         player.stop()
         library.clear()
         client.configure(nil)

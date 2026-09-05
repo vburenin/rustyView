@@ -182,6 +182,10 @@ final class RustyDLNAClient {
         delegate.update(connection: connection)
     }
 
+    func connectionProbe() -> RustyDLNAClient {
+        RustyDLNAClient(configuration: session.configuration)
+    }
+
     func library(_ request: LibraryRequest) async throws -> LibraryPage {
         var components = URLComponents()
         components.path = "/api/web/library"
@@ -221,6 +225,10 @@ final class RustyDLNAClient {
 
     func data(serverPath: String) async throws -> Data {
         let request = try authorizedRequest(serverPath: serverPath)
+        return try await data(for: request)
+    }
+
+    func data(for request: URLRequest) async throws -> Data {
         let (data, response) = try await session.data(for: request)
         try validate(response: response, data: data)
         return data
@@ -289,13 +297,11 @@ final class RustyDLNAClient {
     private func decoded<T: Decodable>(request: URLRequest) async throws -> T {
         let (data, response) = try await session.data(for: request)
         try validate(response: response, data: data)
-        let value = try JSONDecoder().decode(T.self, from: data)
-        if let schema = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let version = schema["schema_version"] as? Int,
-           version != Self.schemaVersion {
+        let version = try JSONDecoder().decode(SchemaEnvelope.self, from: data).schemaVersion
+        if version != Self.schemaVersion {
             throw RustyDLNAError.schemaMismatch(version)
         }
-        return value
+        return try JSONDecoder().decode(T.self, from: data)
     }
 
     private func transcodeRequest<T: Decodable>(
@@ -339,6 +345,13 @@ final class RustyDLNAClient {
     private func encodedPathComponent(_ value: String) -> String {
         value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
     }
+
+    deinit { session.invalidateAndCancel() }
+}
+
+private struct SchemaEnvelope: Decodable {
+    let schemaVersion: Int
+    enum CodingKeys: String, CodingKey { case schemaVersion = "schema_version" }
 }
 
 enum PlaybackCompatibility {

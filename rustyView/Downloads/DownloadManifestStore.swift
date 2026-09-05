@@ -17,6 +17,7 @@ enum DownloadStoreError: LocalizedError {
 final class DownloadManifestStore {
     let rootDirectory: URL
     private let fileManager: FileManager
+    private let lock = NSRecursiveLock()
     private var manifestURL: URL { rootDirectory.appendingPathComponent("manifest.json") }
 
     init(rootDirectory: URL? = nil, fileManager: FileManager = .default) {
@@ -30,6 +31,8 @@ final class DownloadManifestStore {
     }
 
     func load() throws -> DownloadManifest {
+        lock.lock()
+        defer { lock.unlock() }
         guard fileManager.fileExists(atPath: manifestURL.path) else { return DownloadManifest() }
         let data = try Data(contentsOf: manifestURL)
         guard let manifest = try? JSONDecoder().decode(DownloadManifest.self, from: data),
@@ -40,6 +43,8 @@ final class DownloadManifestStore {
     }
 
     func loadValidated() throws -> DownloadManifest {
+        lock.lock()
+        defer { lock.unlock() }
         var manifest = try load()
         var validated: [DownloadRecord] = []
         var retainedFiles: [DownloadRecordIdentity: String] = [:]
@@ -54,6 +59,7 @@ final class DownloadManifestStore {
                 continue
             }
             guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+                  attributes[.type] as? FileAttributeType == .typeRegular,
                   let size = (attributes[.size] as? NSNumber)?.int64Value else {
                 continue
             }
@@ -71,16 +77,18 @@ final class DownloadManifestStore {
     }
 
     func install(temporaryURL: URL, metadata: DownloadTaskMetadata) throws -> DownloadRecord {
+        lock.lock()
+        defer { lock.unlock() }
         guard fileManager.fileExists(atPath: temporaryURL.path) else {
             throw DownloadStoreError.missingTemporaryFile
         }
         try prepareRoot()
         let safeExtension = metadata.fileExtension.lowercased().filter { $0.isLetter || $0.isNumber }
-        let fileName = "offline-\(metadata.recordID.uuidString.lowercased()).\(safeExtension.isEmpty ? "media" : safeExtension)"
-        let destination = rootDirectory.appendingPathComponent(fileName)
-        if fileManager.fileExists(atPath: destination.path) {
-            try fileManager.removeItem(at: destination)
+        var fileName = "offline-\(metadata.recordID.uuidString.lowercased()).\(safeExtension.isEmpty ? "media" : safeExtension)"
+        if fileManager.fileExists(atPath: rootDirectory.appendingPathComponent(fileName).path) {
+            fileName = "offline-\(UUID().uuidString.lowercased()).\(safeExtension.isEmpty ? "media" : safeExtension)"
         }
+        let destination = rootDirectory.appendingPathComponent(fileName)
         try fileManager.moveItem(at: temporaryURL, to: destination)
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
@@ -130,13 +138,24 @@ final class DownloadManifestStore {
     }
 
     func delete(_ record: DownloadRecord) throws {
+        lock.lock()
+        defer { lock.unlock() }
         var manifest = try load()
+        guard manifest.records.contains(record) else { return }
         let fileURL = localURL(for: record)
-        if fileManager.fileExists(atPath: fileURL.path) {
-            try fileManager.removeItem(at: fileURL)
+        let pendingURL = rootDirectory.appendingPathComponent("deleting-\(UUID().uuidString)")
+        let hasFile = fileManager.fileExists(atPath: fileURL.path)
+        if hasFile {
+            try fileManager.moveItem(at: fileURL, to: pendingURL)
         }
         manifest.records.removeAll { $0.id == record.id }
-        try save(manifest)
+        do {
+            try save(manifest)
+        } catch {
+            if hasFile { try? fileManager.moveItem(at: pendingURL, to: fileURL) }
+            throw error
+        }
+        if hasFile { try? fileManager.removeItem(at: pendingURL) }
     }
 
     func localURL(for record: DownloadRecord) -> URL {

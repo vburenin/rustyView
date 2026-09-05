@@ -26,7 +26,10 @@ struct ServerConnection: Equatable, Sendable {
         guard var components = URLComponents(string: trimmedAddress) else {
             throw ConnectionValidationError.invalidURL
         }
-        components.path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard components.user == nil, components.password == nil else {
+            throw ConnectionValidationError.invalidURL
+        }
+        while components.path.hasSuffix("/") { components.path.removeLast() }
         components.query = nil
         components.fragment = nil
         guard let url = components.url else { throw ConnectionValidationError.invalidURL }
@@ -76,7 +79,7 @@ struct URLOrigin: Equatable, Sendable {
     }
 
     func matches(_ url: URL) -> Bool {
-        self == URLOrigin(url: url)
+        url.user == nil && url.password == nil && self == URLOrigin(url: url)
     }
 
     func matches(scheme candidateScheme: String?, host candidateHost: String, port candidatePort: Int) -> Bool {

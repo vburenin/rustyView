@@ -141,6 +141,18 @@ struct LibraryView: View {
             }
         }
         .refreshable { await app.library.reloadReportingErrors() }
+        .safeAreaInset(edge: .bottom) {
+            if let error = app.library.errorMessage {
+                VStack(spacing: 8) {
+                    Text(error).font(.callout)
+                    Button("Refresh Library") { Task { await app.library.reloadReportingErrors() } }
+                        .buttonStyle(.bordered)
+                }
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(.regularMaterial)
+            }
+        }
     }
 
     @ViewBuilder

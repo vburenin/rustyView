@@ -13,6 +13,7 @@ struct MovieDetailView: View {
     @State private var selectedAudio = 0
     @State private var selectedQuality = "auto"
     @State private var pendingDownloadDeletion: DownloadRecord?
+    @State private var loadRequest = UUID()
 
     init(entry: LibraryEntry) {
         mediaID = entry.id
@@ -347,18 +348,22 @@ struct MovieDetailView: View {
     }
 
     private func load() async {
+        let request = UUID()
+        loadRequest = request
         isLoading = true
         errorMessage = nil
+        defer { if request == loadRequest { isLoading = false } }
         do {
             let loaded = try await app.client.item(id: mediaID)
+            guard request == loadRequest, !Task.isCancelled else { return }
             item = loaded
             selectedAudio = loaded.defaultAudioIndex
         } catch is CancellationError {
             return
         } catch {
+            guard request == loadRequest, !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
         }
-        isLoading = false
     }
 
     private func startDownload(item: MediaItem, kind: DownloadKind) {

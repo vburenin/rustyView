@@ -29,6 +29,7 @@
 		9AC3FBB4FA476E5F188C5E82 /* DownloadsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DF80727CBFD68B8E3FED76A /* DownloadsView.swift */; };
 		ABC9998F50FBD6F58CD1B40D /* ConnectionSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B29666E9222FD152A51D889C /* ConnectionSetupView.swift */; };
 		AD798C446D4E7E74000CD2A6 /* PlayerViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C2EAD94F2EC3E3F7595BFFA /* PlayerViewController.swift */; };
+		B61BF71FBEBBB46FC261A23F /* ReviewRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94E6093D85A7B2C70343B40B /* ReviewRegressionTests.swift */; };
 		B8324D9E19E28991F076C17A /* PlaybackProgressStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93C1ED2BECD57311F37BD2A6 /* PlaybackProgressStore.swift */; };
 		C54E9B15C4AFAEBE20107E03 /* PlayerScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7335FCBED5F02988A06A9BAC /* PlayerScreen.swift */; };
 		E0B008DE2C7CEA149177B3B3 /* RustyViewCoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F471FBA6C404797D50ACD9BD /* RustyViewCoreTests.swift */; };
@@ -77,6 +78,7 @@
 		8B60547FB0DE51A5E33CD3B5 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		91D0EE6C6AF885B8FFDEBA46 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		93C1ED2BECD57311F37BD2A6 /* PlaybackProgressStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackProgressStore.swift; sourceTree = "<group>"; };
+		94E6093D85A7B2C70343B40B /* ReviewRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewRegressionTests.swift; sourceTree = "<group>"; };
 		961A3F270781E5AAC664E0BC /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
 		96E54C4F634481DB658AB7B8 /* rustyViewTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = rustyViewTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A37961EA0731E9B17724E589 /* MovieDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieDetailView.swift; sourceTree = "<group>"; };
@@ -218,6 +220,7 @@
 		F1773C067FAA3E45DDCAE7F4 /* rustyViewTests */ = {
 			isa = PBXGroup;
 			children = (
+				94E6093D85A7B2C70343B40B /* ReviewRegressionTests.swift */,
 				F471FBA6C404797D50ACD9BD /* RustyViewCoreTests.swift */,
 			);
 			path = rustyViewTests;
@@ -408,6 +411,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B61BF71FBEBBB46FC261A23F /* ReviewRegressionTests.swift in Sources */,
 				E0B008DE2C7CEA149177B3B3 /* RustyViewCoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

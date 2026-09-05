@@ -328,6 +328,21 @@ final class RustyViewJourneyTests: XCTestCase {
             "Relaunched offline playback must remain independent of the unavailable server"
         )
         app.buttons["Close player"].tap()
+        app.buttons["Settings"].firstMatch.tap()
+        app.buttons["Forget Connection"].tap()
+        XCTAssertTrue(app.staticTexts["Forget this server?"].waitForExistence(timeout: 3))
+        try XCTUnwrap(app.buttons.matching(identifier: "Forget Connection")
+            .allElementsBoundByIndex.first(where: \.isHittable)).tap()
+        XCTAssertTrue(app.navigationBars["Server"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Cancel"].isHittable, "Saved movies must remain reachable without server credentials")
+        app.buttons["Cancel"].tap()
+        app.buttons["Downloads"].firstMatch.tap()
+        persistedDownload.tap()
+        XCTAssertTrue(app.buttons["Close player"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["Preparing video…"].waitForNonExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Playback couldn't continue"].exists)
+        XCTAssertEqual(server?.requestCount, requestsBeforeOfflineRelaunch)
+        app.buttons["Close player"].tap()
         let deleteButton = deleteButtons.firstMatch
         let deletedRecordIdentifier = deleteButton.identifier
         XCTAssertFalse(deletedRecordIdentifier.isEmpty)

@@ -9,6 +9,7 @@ struct ConnectionSetupView: View {
     @State private var username = ""
     @State private var password = ""
     @State private var isConnecting = false
+    @State private var connectionTask: Task<Void, Never>?
     @FocusState private var focusedField: Field?
 
     var body: some View {
@@ -49,7 +50,7 @@ struct ConnectionSetupView: View {
                         }
                         Divider()
                         LabeledContent("Password") {
-                            SecureField(canDismiss ? "Unchanged" : "Password", text: $password)
+                            SecureField(app.settings.hasSavedConnection ? "Unchanged" : "Password", text: $password)
                                 .textContentType(.password)
                                 .multilineTextAlignment(.trailing)
                                 .focused($focusedField, equals: .password)
@@ -57,6 +58,13 @@ struct ConnectionSetupView: View {
                     }
                     .padding()
                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+
+                    if let error = app.connectionError {
+                        Label(error.message, systemImage: "exclamationmark.triangle")
+                            .font(.callout)
+                            .foregroundStyle(.primary)
+                            .accessibilityIdentifier("connection-error")
+                    }
 
                     Button(action: connect) {
                         HStack {
@@ -67,7 +75,7 @@ struct ConnectionSetupView: View {
                         .frame(maxWidth: .infinity, minHeight: 50)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(.orange)
+                    .tint(Color("AccessibleAccent"))
                     .disabled(isConnecting || serverAddress.isEmpty || username.isEmpty)
                 }
                 .padding(24)
@@ -85,16 +93,18 @@ struct ConnectionSetupView: View {
             }
         }
         .onAppear {
+            app.connectionError = nil
             serverAddress = app.settings.serverAddress
             username = app.settings.username
             focusedField = serverAddress.isEmpty ? .server : (username.isEmpty ? .username : .password)
         }
+        .onDisappear { connectionTask?.cancel() }
     }
 
     private func connect() {
         focusedField = nil
         isConnecting = true
-        Task {
+        connectionTask = Task {
             let succeeded = await app.connect(
                 serverAddress: serverAddress,
                 username: username,

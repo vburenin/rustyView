@@ -39,6 +39,14 @@ final class AppSettings: ObservableObject {
         )
     }
 
+    func passwordForConnection(serverAddress: String, username: String, enteredPassword: String) throws -> String {
+        guard enteredPassword.isEmpty else { return enteredPassword }
+        let candidate = try ServerConnection(serverAddress: serverAddress, username: username, password: "")
+        guard let saved = try? connection(), candidate.origin == saved.origin,
+              candidate.username == saved.username else { return enteredPassword }
+        return saved.password
+    }
+
     func save(serverAddress: String, username: String, password: String) throws -> ServerConnection {
         let connection = try ServerConnection(
             serverAddress: serverAddress,

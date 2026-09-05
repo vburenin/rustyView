@@ -26,6 +26,11 @@ cohesive product rather than independent demos.
   and downloads. It deliberately forwards each child model's change publisher
   because SwiftUI does not observe nested `ObservableObject` instances by
   itself.
+- Connection edits use an isolated API probe before committing Keychain and app
+  state. Blank passwords may reuse the saved secret only for the same origin and
+  account. Artwork caches include server and account identity, with at most four
+  active artwork requests. Offline downloads remain reachable after forgetting
+  the connection. Search errors and caption responses obey request ownership.
 - Streaming first attempts an authenticated original where appropriate, then
   recovers through server-prepared HLS and, if a copied stream still fails, a
   forced portable H.264/AAC rendition. A non-Auto quality choice always uses
@@ -48,6 +53,10 @@ cohesive product rather than independent demos.
   preserves the server path and retry attempt. Transient transport, rate-limit,
   timeout, and server failures create a new system-owned background task with
   bounded exponential backoff, so retry scheduling survives app suspension.
+  Automatic retries stop after six attempts and expose Retry Now. Installation
+  and cancellation are serialized so late completions cannot publish cancelled
+  copies; manifest operations are serialized and failed deletion saves restore
+  the original media file.
   Downloads exposes queued, live progress, retrying, saving, failed, and
   completed states. While compatible output is being produced, the client
   polls its generation-scoped status and shows exact prepared media time

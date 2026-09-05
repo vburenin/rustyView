@@ -40,6 +40,8 @@ credentials.
 
 You can update your server address or credentials in
 **Settings → Edit Connection**.
+Leaving the password blank keeps the saved password only for the same server
+and user name. Connection edits are verified before replacing your current library.
 
 ## Watch your way
 
@@ -62,6 +64,9 @@ starts the download immediately.
 Follow preparation and transfer progress in **Downloads**. Once the movie is
 available offline, play it from that tab or tap **Watch Offline** on its detail
 page—even in airplane mode.
+Your offline movies remain accessible after forgetting the server connection.
+Transient download failures retry automatically up to six times; after that,
+choose **Retry Now** when your connection is available.
 
 Downloads can continue in the background. If you force-quit rustyView, reopen
 it to let transfers continue. To save mobile data, select **Wi-Fi Only** under

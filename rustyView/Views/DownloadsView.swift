@@ -66,6 +66,15 @@ struct DownloadsView: View {
             }
         }
         .navigationTitle("Downloads")
+        .safeAreaInset(edge: .bottom) {
+            if let error = app.downloads.errorMessage {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(.regularMaterial)
+            }
+        }
         .alert("Delete offline copy?", isPresented: Binding(
             get: { pendingDeletion != nil },
             set: { if !$0 { pendingDeletion = nil } }
@@ -118,7 +127,10 @@ private struct ActiveDownloadRow: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("active-download-\(download.mediaID)")
-                .accessibilityHint("Shows movie details and download status")
+                .disabled(download.serverOrigin != app.client.connection?.baseURL.absoluteString)
+                .accessibilityHint(download.serverOrigin == app.client.connection?.baseURL.absoluteString
+                    ? "Shows movie details and download status"
+                    : "Reconnect to this movie's server to view its details")
                 Spacer()
                 switch download.phase {
                 case .failed:
@@ -135,6 +147,7 @@ private struct ActiveDownloadRow: View {
                 default:
                     Button(role: .cancel) { app.downloads.cancel(download) } label: {
                         Image(systemName: "xmark.circle.fill")
+                            .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.borderless)
                     .accessibilityLabel("Cancel download")

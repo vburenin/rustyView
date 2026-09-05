@@ -36,13 +36,8 @@ final class LibraryModel: ObservableObject {
     }
 
     func reloadReportingErrors() async {
-        do {
-            try await reload()
-        } catch is CancellationError {
-            return
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        // load publishes errors only while it still owns the request.
+        try? await reload()
     }
 
     func switchView(_ mode: LibraryViewMode) async {
@@ -73,8 +68,15 @@ final class LibraryModel: ObservableObject {
         try? await load(reset: false)
     }
 
+    func replaceWithVerifiedPage(_ page: LibraryPage) {
+        clear()
+        apply(page, reset: true)
+    }
+
     func clear() {
         requestEpoch += 1
+        isLoading = false
+        query = ""
         entries = []
         capabilities = nil
         viewMode = .library
@@ -108,11 +110,25 @@ final class LibraryModel: ObservableObject {
             limit: 60,
             generation: reset ? nil : generation
         )
-        let page = try await client.library(request)
+        let page: LibraryPage
+        do {
+            page = try await client.library(request)
+            try Task.checkCancellation()
+        } catch {
+            guard epoch == requestEpoch else { return }
+            if !Task.isCancelled && !(error is CancellationError) {
+                errorMessage = error.localizedDescription
+            }
+            throw error
+        }
         guard epoch == requestEpoch else { return }
         guard page.schemaVersion == RustyDLNAClient.schemaVersion else {
             throw RustyDLNAError.schemaMismatch(page.schemaVersion)
         }
+        apply(page, reset: reset)
+    }
+
+    private func apply(_ page: LibraryPage, reset: Bool) {
         generation = page.generation
         capabilities = page.capabilities
         currentFolder = page.folder
