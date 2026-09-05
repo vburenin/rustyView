@@ -91,6 +91,10 @@ scan_urls() {
         fi
 
         host=${authority%%:*}
+        # Public companion project linked from the product documentation.
+        if [[ "$url" == "https://github.com/vburenin/rustyDLNA" ]]; then
+            continue
+        fi
         if ! is_allowed_public_host "$host"; then
             report_match "$file" "$line" "non-example URL literal; keep deploy endpoints in ignored local configuration"
         fi
