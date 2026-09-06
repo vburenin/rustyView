@@ -13,8 +13,8 @@ enum DownloadKind: String, Codable, CaseIterable, Sendable {
 }
 
 struct DownloadRecord: Codable, Identifiable, Hashable, Sendable {
-    let id: UUID
-    let serverOrigin: String
+    var id: UUID
+    var serverOrigin: String
     let mediaID: String
     let title: String
     let kind: DownloadKind
@@ -23,11 +23,46 @@ struct DownloadRecord: Codable, Identifiable, Hashable, Sendable {
     let completedAt: Date
     let durationSeconds: Int?
     let resolution: String?
-    let artworkPath: String?
+    var artworkPath: String?
     var qualityID: String? = nil
     var qualityLabel: String? = nil
     var audioTrackIndex: Int? = nil
     var audioTrackLabel: String? = nil
+    var accountUsername: String? = nil
+    var assetInspection: DownloadAssetInspection? = nil
+    var movie: MovieMetadata? = nil
+    var packageDirectoryName: String? = nil
+    var localCaptions: [OfflineCaption]? = nil
+    var packageStorageBytes: Int64? = nil
+    var installedAttemptID: UUID? = nil
+    var artworkFailure: String? = nil
+    var packageIssue: String? = nil
+
+    var movieMetadata: MovieMetadata {
+        movie ?? MovieMetadata(mediaID: mediaID, title: title,
+                               durationSeconds: durationSeconds.map(Double.init), resolution: resolution)
+    }
+
+    var isReadyToWatch: Bool {
+        packageIssue == nil && assetInspection?.integrity == .verified && assetInspection?.playability == .playable
+    }
+
+    var readinessMessage: String {
+        guard let assetInspection else { return "Stored · Checking playback compatibility" }
+        if isReadyToWatch { return "Ready to Watch" }
+        if assetInspection.integrity == .invalid { return "Stored · Video could not be verified" }
+        return "Stored · Compatible copy needed"
+    }
+
+    var validationMessage: String? {
+        if let packageIssue { return packageIssue }
+        guard let assetInspection else { return "The saved file will be checked on this device before it is ready to watch." }
+        if isReadyToWatch { return nil }
+        if assetInspection.integrity == .invalid {
+            return "The saved video could not be read completely. Download a new compatible copy to watch offline."
+        }
+        return "This device could not verify playback of the saved file. You can keep it and download a compatible copy."
+    }
 
     var videoQualityDescription: String {
         DownloadMetadataPresentation.videoQuality(
@@ -48,7 +83,7 @@ struct DownloadRecord: Codable, Identifiable, Hashable, Sendable {
 
 struct DownloadTaskMetadata: Codable, Equatable, Sendable {
     let recordID: UUID
-    let serverOrigin: String
+    var serverOrigin: String
     let mediaID: String
     let title: String
     let kind: DownloadKind
@@ -57,10 +92,13 @@ struct DownloadTaskMetadata: Codable, Equatable, Sendable {
     let resolution: String?
     var serverPath: String? = nil
     var retryAttempt: Int? = nil
+    var attemptID: UUID? = nil
     var qualityID: String? = nil
     var qualityLabel: String? = nil
     var audioTrackIndex: Int? = nil
     var audioTrackLabel: String? = nil
+    var accountUsername: String? = nil
+    var movie: MovieMetadata? = nil
 
     var videoQualityDescription: String {
         DownloadMetadataPresentation.videoQuality(
@@ -100,13 +138,15 @@ private enum DownloadMetadataPresentation {
     ) -> String {
         guard kind == .compatible else { return "All original tracks" }
         let label = trackLabel ?? "Default track"
-        guard let trackIndex else { return label }
-        return "\(label) · Track ID \(trackIndex)"
+        return label
     }
 }
 
 enum DownloadPhase: Equatable, Sendable {
     case queued
+    case pausing
+    case paused(canResume: Bool)
+    case waiting(reason: DownloadWaitingReason)
     case downloading(progress: Double, received: Int64, expected: Int64?)
     case retrying(attempt: Int, scheduledAt: Date, reason: String)
     case finishing
@@ -130,13 +170,15 @@ struct ActiveDownload: Identifiable, Equatable, Sendable {
     var phase: DownloadPhase
     var taskIdentifier: Int
     var metadata: DownloadTaskMetadata
+    var failure: UserFacingError? = nil
 }
 
 struct DownloadPreparationProgress: Equatable, Sendable {
     let producedSeconds: Double
     let totalSeconds: Double
+    let isComplete: Bool
 
-    init?(producedSeconds: Double, durationSeconds: Int?) {
+    init?(producedSeconds: Double, durationSeconds: Int?, isComplete: Bool = false) {
         guard producedSeconds.isFinite,
               producedSeconds >= 0,
               let durationSeconds,
@@ -145,6 +187,7 @@ struct DownloadPreparationProgress: Equatable, Sendable {
         }
         totalSeconds = Double(durationSeconds)
         self.producedSeconds = min(producedSeconds, totalSeconds)
+        self.isComplete = isComplete
     }
 
     var fraction: Double { producedSeconds / totalSeconds }
@@ -231,6 +274,9 @@ enum DownloadNetworkPolicy {
 
 enum DownloadProgressValues {
     static func expectedByteCount(reported: Int64, response: URLResponse?) -> Int64? {
+        if let response = response as? HTTPURLResponse, response.statusCode == 206 {
+            return DownloadHTTPRange.completeLength(of: response)
+        }
         if reported > 0 { return reported }
         let responseLength = response?.expectedContentLength ?? NSURLSessionTransferSizeUnknown
         return responseLength > 0 ? responseLength : nil

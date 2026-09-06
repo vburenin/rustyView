@@ -1,66 +1,42 @@
 import SwiftUI
 
-private actor ArtworkRequests {
-    static let shared = ArtworkRequests()
-    private var running = 0
-    private var waiting: [CheckedContinuation<Void, Never>] = []
-
-    func acquire() async {
-        if running < 4 { running += 1; return }
-        await withCheckedContinuation { waiting.append($0) }
-    }
-
-    func release() {
-        if waiting.isEmpty { running -= 1 } else { waiting.removeFirst().resume() }
-    }
-}
-
-private final class ArtworkCache {
-    static let shared: NSCache<NSString, UIImage> = {
-        let cache = NSCache<NSString, UIImage>()
-        cache.countLimit = 200
-        cache.totalCostLimit = 64 * 1_024 * 1_024
-        return cache
-    }()
-}
-
 @MainActor
 final class ArtworkModel: ObservableObject {
     @Published var image: UIImage?
     @Published var failed = false
 
     private var task: Task<Void, Never>?
+    private var generation: UInt64 = 0
 
     func load(path: String?, client: RustyDLNAClient) {
-        task?.cancel()
+        cancel()
         image = nil
         failed = false
-        guard let path, let request = try? client.authorizedRequest(serverPath: path),
-              let url = request.url else { return }
-        let key = "\(client.connection?.username ?? "")|\(url.absoluteString)" as NSString
-        if let cached = ArtworkCache.shared.object(forKey: key) {
-            image = cached
-            return
-        }
-        task = Task {
-            await ArtworkRequests.shared.acquire()
+        guard let path, let owner = client.connection,
+              let url = try? owner.resolve(serverPath: path) else { return }
+        var request = URLRequest(url: url)
+        request.setValue("image/*", forHTTPHeaderField: "Accept")
+        request.setValue(owner.authorizationHeader(), forHTTPHeaderField: "Authorization")
+        let requestGeneration = generation
+        task = Task { [weak self] in
             do {
-                try Task.checkCancellation()
-                let data = try await client.data(for: request)
-                try Task.checkCancellation()
-                guard let decoded = UIImage(data: data) else { throw RustyDLNAError.invalidResponse }
-                let pixels = decoded.size.width * decoded.size.height * decoded.scale * decoded.scale
-                let cost = Int(min(CGFloat(Int.max / 2), pixels * 4))
-                ArtworkCache.shared.setObject(decoded, forKey: key, cost: cost)
-                image = decoded
+                let decoded = try await ArtworkPipeline.shared.image(for: request, client: client, owner: owner)
+                guard !Task.isCancelled, let self, self.generation == requestGeneration,
+                      client.connection == owner else { return }
+                self.image = decoded
             } catch {
-                if !Task.isCancelled { failed = true }
+                guard !Task.isCancelled, let self, self.generation == requestGeneration,
+                      client.connection == owner else { return }
+                self.failed = true
             }
-            await ArtworkRequests.shared.release()
         }
     }
 
-    func cancel() { task?.cancel() }
+    func cancel() {
+        generation &+= 1
+        task?.cancel()
+        task = nil
+    }
 
     deinit { task?.cancel() }
 }

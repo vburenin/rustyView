@@ -1,9 +1,14 @@
 import Foundation
 
+enum CredentialAvailability: Equatable, Sendable {
+    case unchecked, missing, available, unavailable
+}
+
 @MainActor
 final class AppSettings: ObservableObject {
     @Published var serverAddress: String
     @Published var username: String
+    @Published private(set) var credentialAvailability: CredentialAvailability = .unchecked
     @Published var allowCellularDownloads: Bool {
         didSet { defaults.set(allowCellularDownloads, forKey: Self.allowCellularDownloadsKey) }
     }
@@ -23,28 +28,58 @@ final class AppSettings: ObservableObject {
             : defaults.bool(forKey: Self.allowCellularDownloadsKey)
     }
 
-    var savedPassword: String {
-        (try? secrets.read(account: passwordAccount)) ?? ""
+    var hasSavedConnection: Bool {
+        !serverAddress.isEmpty && !username.isEmpty && credentialAvailability == .available
     }
 
-    var hasSavedConnection: Bool {
-        !serverAddress.isEmpty && !username.isEmpty && !savedPassword.isEmpty
+    /// Missing credentials and an unavailable Keychain are different startup
+    /// states. Reading a SwiftUI property never performs a Keychain operation.
+    func savedConnection() throws -> ServerConnection? {
+        guard !serverAddress.isEmpty, !username.isEmpty else {
+            credentialAvailability = .missing
+            return nil
+        }
+        guard let password = try readPassword() else { return nil }
+        return try ServerConnection(serverAddress: serverAddress, username: username, password: password)
     }
 
     func connection(password: String? = nil) throws -> ServerConnection {
-        try ServerConnection(
-            serverAddress: serverAddress,
-            username: username,
-            password: password ?? savedPassword
-        )
+        if let password { return try ServerConnection(serverAddress: serverAddress, username: username, password: password) }
+        guard let saved = try savedConnection() else {
+            throw UserFacingError(category: .credentialsMissing, field: .password)
+        }
+        return saved
+    }
+
+    func canReuseSavedPassword(serverAddress: String, username: String) -> Bool {
+        credentialAvailability == .available && isSavedAccount(serverAddress: serverAddress, username: username)
+    }
+
+    func isSavedAccount(serverAddress: String, username: String) -> Bool {
+        guard let candidate = try? ServerConnection(serverAddress: serverAddress, username: username, password: ""),
+              let saved = try? ServerConnection(serverAddress: self.serverAddress, username: self.username, password: "") else { return false }
+        return candidate.origin == saved.origin && candidate.username == saved.username
+    }
+
+    private func readPassword() throws -> String? {
+        do {
+            guard let saved = try secrets.read(account: passwordAccount), !saved.isEmpty else {
+                credentialAvailability = .missing
+                return nil
+            }
+            credentialAvailability = .available
+            return saved
+        } catch {
+            credentialAvailability = .unavailable
+            throw error
+        }
     }
 
     func passwordForConnection(serverAddress: String, username: String, enteredPassword: String) throws -> String {
         guard enteredPassword.isEmpty else { return enteredPassword }
-        let candidate = try ServerConnection(serverAddress: serverAddress, username: username, password: "")
-        guard let saved = try? connection(), candidate.origin == saved.origin,
-              candidate.username == saved.username else { return enteredPassword }
-        return saved.password
+        _ = try ServerConnection(serverAddress: serverAddress, username: username, password: "")
+        guard isSavedAccount(serverAddress: serverAddress, username: username) else { return enteredPassword }
+        return try readPassword() ?? ""
     }
 
     func save(serverAddress: String, username: String, password: String) throws -> ServerConnection {
@@ -58,6 +93,7 @@ final class AppSettings: ObservableObject {
         self.username = connection.username
         defaults.set(self.serverAddress, forKey: "serverAddress")
         defaults.set(self.username, forKey: "username")
+        credentialAvailability = password.isEmpty ? .missing : .available
         return connection
     }
 
@@ -67,5 +103,6 @@ final class AppSettings: ObservableObject {
         defaults.removeObject(forKey: "username")
         serverAddress = ""
         username = ""
+        credentialAvailability = .missing
     }
 }

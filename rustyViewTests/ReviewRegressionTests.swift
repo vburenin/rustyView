@@ -89,7 +89,7 @@ final class ReviewRegressionTests: XCTestCase {
         let delegate = DownloadSessionDelegate(store: store)
         let metadata = DownloadTaskMetadata(recordID: UUID(), serverOrigin: "https://media.example.test", mediaID: "42", title: "The Tin Comet", kind: .compatible, fileExtension: "mp4", durationSeconds: 300, resolution: nil)
         let incoming = root.appendingPathComponent("incoming")
-        try Data(repeating: 4, count: 128).write(to: incoming)
+        try OfflineMediaFixture.validData().write(to: incoming)
         try delegate.discard(taskIdentifier: 1)
         XCTAssertNil(try delegate.install(temporaryURL: incoming, metadata: metadata, taskIdentifier: 1))
         XCTAssertTrue(try store.load().records.isEmpty)
@@ -107,7 +107,7 @@ final class ReviewRegressionTests: XCTestCase {
         let fileManager = ReviewFileManager()
         let store = DownloadManifestStore(rootDirectory: root.appendingPathComponent("offline"), fileManager: fileManager)
         let incoming = root.appendingPathComponent("incoming")
-        let payload = Data(repeating: 3, count: 128)
+        let payload = try OfflineMediaFixture.validData()
         try payload.write(to: incoming)
         let metadata = DownloadTaskMetadata(recordID: UUID(), serverOrigin: "https://media.example.test", mediaID: "42", title: "The Tin Comet", kind: .compatible, fileExtension: "mp4", durationSeconds: 300, resolution: nil)
         let record = try store.install(temporaryURL: incoming, metadata: metadata)
@@ -244,7 +244,7 @@ final class ReviewRegressionTests: XCTestCase {
         let store = DownloadManifestStore(rootDirectory: root.appendingPathComponent("offline"))
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let incoming = root.appendingPathComponent("incoming")
-        try Data(repeating: 7, count: 64).write(to: incoming)
+        try OfflineMediaFixture.validData().write(to: incoming)
         let metadata = DownloadTaskMetadata(recordID: UUID(), serverOrigin: "https://media.example.test", mediaID: "42", title: "The Tin Comet", kind: .compatible, fileExtension: "mp4", durationSeconds: 300, resolution: nil)
         let record = try store.install(temporaryURL: incoming, metadata: metadata)
         let installed = store.localURL(for: record)
@@ -254,11 +254,11 @@ final class ReviewRegressionTests: XCTestCase {
         try Data(repeating: 9, count: 64).write(to: outside)
         try FileManager.default.createSymbolicLink(at: installed, withDestinationURL: outside)
         let size = (try FileManager.default.attributesOfItem(atPath: installed.path)[.size] as! NSNumber).int64Value
-        var manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: store.rootDirectory.appendingPathComponent("manifest.json"))) as! [String: Any]
+        var manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: store.stateStore.stateURL)) as! [String: Any]
         var records = manifest["records"] as! [[String: Any]]
         records[0]["byteCount"] = size
         manifest["records"] = records
-        try JSONSerialization.data(withJSONObject: manifest).write(to: store.rootDirectory.appendingPathComponent("manifest.json"))
+        try JSONSerialization.data(withJSONObject: manifest).write(to: store.stateStore.stateURL)
         XCTAssertTrue(try store.loadValidated().records.isEmpty)
         XCTAssertEqual(try Data(contentsOf: outside), Data(repeating: 9, count: 64))
     }

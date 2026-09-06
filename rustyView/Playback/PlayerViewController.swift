@@ -48,6 +48,7 @@ final class PlayerPictureInPictureController: NSObject, ObservableObject {
 
     private var controller: AVPictureInPictureController?
     private var possibilityObservation: NSKeyValueObservation?
+    private var allowsAutomaticStart = true
 
     func connect(to playerLayer: AVPlayerLayer) {
         guard controller == nil,
@@ -56,7 +57,7 @@ final class PlayerPictureInPictureController: NSObject, ObservableObject {
         else { return }
 
         controller.delegate = self
-        controller.canStartPictureInPictureAutomaticallyFromInline = true
+        controller.canStartPictureInPictureAutomaticallyFromInline = allowsAutomaticStart
         self.controller = controller
         possibilityObservation = controller.observe(
             \.isPictureInPicturePossible,
@@ -79,6 +80,13 @@ final class PlayerPictureInPictureController: NSObject, ObservableObject {
             errorMessage = "Picture in Picture is not ready for this video yet."
         }
     }
+
+    func setAllowsAutomaticStart(_ allowed: Bool) {
+        allowsAutomaticStart = allowed
+        controller?.canStartPictureInPictureAutomaticallyFromInline = allowed
+    }
+
+    func stop() { controller?.stopPictureInPicture() }
 
 }
 

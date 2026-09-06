@@ -16,7 +16,7 @@ connection.
 - **Watch your way.** Choose audio tracks and subtitles, jump between chapters,
   adjust playback speed, and select a streaming quality that suits your connection.
 - **Keep your place.** Resume unfinished movies and skip forward or back with
-  a double tap.
+  a double tap. Keep favorites and a history of movies you have watched.
 - **Take it with you.** Download a compatible copy for offline viewing and
   manage your collection from the Downloads tab.
 - **Feel at home on Apple devices.** Enjoy layouts for iPhone and iPad,
@@ -42,6 +42,35 @@ You can update your server address or credentials in
 **Settings → Edit Connection**.
 Leaving the password blank keeps the saved password only for the same server
 and user name. Connection edits are verified before replacing your current library.
+If a connection fails, the app offers actions for the cause: edit rejected
+sign-in details, retry an interrupted connection, or open downloaded movies
+while offline. An unavailable Keychain password is kept distinct from a missing
+password. Cancelling a connection attempt leaves your previous connection intact.
+
+## Pick up where you left off
+
+**Continue Watching** brings unfinished movies back within reach. Tap **Resume**
+to continue or choose **Start Over** from the row's actions menu. Start Over first saves that choice;
+if saving fails, your current player and previous saved position remain available.
+Removing a movie from Continue Watching hides the row while keeping its position
+for the next time you open its details.
+
+Use a movie's actions menu to add it to **Favorites**. **History** shows each movie
+once, with its latest viewing. Movies appear only after playback starts; finishing
+one marks it watched. Favorites and history remain after a local copy is deleted
+or the movie disappears from the server.
+
+Saved entries belong to their original server and account. When a ready local
+copy exists, Resume uses that copy even after you forget the connection. A movie
+from another account never silently opens through the current login. Local
+resume and remaining time use the inspected file's duration, so an old online
+bookmark cannot seek past the end of a shorter saved copy.
+
+Library remembers your browsing mode and sort for each account. Returning from
+details, search, or a folder can restore the visible movie within that browsing
+session. Loading feedback identifies a new folder or search while its results
+arrive. Empty libraries offer **Refresh**, and an empty search offers a way back
+to your collection.
 
 ## Watch your way
 
@@ -50,28 +79,100 @@ skip ten seconds, or use the timeline to find a moment. Audio, subtitles,
 playback speed, and fit or fill controls are available in the player; open
 playback options for chapters and streaming quality.
 
+With a keyboard, Space plays or pauses, arrow keys skip ten seconds, and O opens
+playback options. Accessibility text sizes keep controls visible until you
+dismiss them.
+
+Play and Pause reflect what will happen even while a movie is preparing. If
+playback stops advancing, rustyView makes a bounded recovery attempt while
+preserving your time and choices. **Retry Current Playback** lets you try again
+after a connection problem; **Close** always leaves the player.
+
 Leave **Quality** on **Auto** for everyday viewing, or choose a specific
-quality before you play. Available audio tracks, subtitles, chapters, and
-quality choices depend on the movie and your server.
+quality before you play. Your preferred quality and audio language are saved
+for later movies. If a server does not offer your preferred quality, the player
+explains that it is using Auto for this movie and keeps your saved preference.
+Available audio tracks, subtitles, chapters, and quality choices depend on the
+movie and your server.
+
+Streaming changes inside the player stay in a draft until you tap
+**Apply Streaming Changes**. **Cancel** leaves playback unchanged. The draft
+keeps Original and encoded-quality choices consistent before you apply them.
+
+AirPlay video output is unavailable for online streams because rustyView keeps
+their media requests under the app's control. The player explains this before
+output selection. Use Screen Mirroring to show the device's screen elsewhere.
+Saved movies retain native output options where supported.
+
+If a stream points outside your connected server, playback stops with an error.
+rustyView does not follow that reference or automatically try another format.
+Check the connection before retrying; saved movies remain available offline.
+
+Subtitles show a loading state until usable text arrives. If a subtitle cannot
+load, **Retry Subtitles** tries that choice again and **Turn Subtitles Off**
+clears it. The menu includes embedded subtitles exposed by the device and
+separately saved or server-provided text. Separate text is drawn inside
+rustyView; it does not appear in Picture in Picture or AirPlay video. The player
+explains that limitation before you start those output modes.
+
+Playback pauses for audio interruptions and when an audio device disconnects.
+After an interruption, it resumes only when iOS permits it and you have not
+changed the playback intent. A movie opened during the interruption stays
+paused until you choose Play. If iOS restarts its audio services, rustyView prepares the current movie
+at its retained position and waits for **Play**. Now Playing and remote
+controls follow the current movie's position, speed, and play/pause state;
+closing the player releases those controls.
 
 ## Download now, watch later
 
 Open a movie, tap **Download**, and choose **Compatible copy** for a version
 prepared for playback on your device. Choose **Original file** when you want
 the source file and know your device can play it. Selecting either option
-starts the download immediately.
+starts the download immediately. The choice shows the selected audio, quality,
+and what the copy preserves. Source-file size and estimated output size are
+labelled separately; some copies have no reliable size until downloading.
 
-Follow preparation and transfer progress in **Downloads**. Once the movie is
-available offline, play it from that tab or tap **Watch Offline** on its detail
+**Downloads** shows preparation progress and bytes received, with the final size
+when available. Transfer progress continues after preparation finishes. Once the movie is
+marked **Ready to Watch**, play it from that tab or tap **Watch Offline** on its detail
 page—even in airplane mode.
+Each movie appears once. If you keep both original and compatible versions,
+open its actions menu and choose **Manage Copies** to play or delete a specific copy.
 Your offline movies remain accessible after forgetting the server connection.
+Open a saved movie to see its local details, included audio and subtitles, and
+chapters. **Watch Online** remains available when connected, with its own audio
+and quality choices. A local playback failure never silently switches online.
 Transient download failures retry automatically up to six times; after that,
 choose **Retry Now** when your connection is available.
+Failed requests and their selected format remain in the queue across relaunches
+until you retry or remove them. Retry requires the account that requested the
+download.
+
+rustyView inspects downloaded video before marking it ready. An original that
+the device cannot play remains stored with that limitation shown. You can
+download a compatible copy while keeping the original. Inspection checks the
+media structure and sample decoding; an actual playback failure still offers
+recovery. Older copies are checked again locally, and older copies without
+account information stay accessible in Downloads without being attached to a
+new account's library.
 
 Downloads can continue in the background. If you force-quit rustyView, reopen
-it to let transfers continue. To save mobile data, select **Wi-Fi Only** under
-**Settings → Download Network**. Use the delete control in Downloads to free
-space on your device; your server's original stays in your library.
+it to let transfers continue. Pause a transfer and resume it later; rustyView
+preserves transferred bytes when the server and system support resumption.
+An older server or a changing prepared file may require a fresh transfer, which
+the queue explains. To save mobile data, select **Wi-Fi Only** under
+**Settings → Download Network**. Waiting for Wi-Fi, a paused download, and a
+scheduled retry have distinct states. A small number of transfers run at once;
+the rest remain queued. Choose **Delete Download** from a copy's actions menu to free space on
+your device; your server's original stays in your library. Saved-file storage
+includes local posters and subtitles as well as video.
+
+Search Downloads by title or saved description, and sort by recently saved,
+title, or time remaining. Each row shows a concise status and one playback or
+transfer action; other choices stay in its actions menu. Deleting
+a copy requires an explicit confirmation and does not remove its favorite or
+viewing history. If saved-library storage cannot be read or updated, the app
+shows a recovery action and preserves the existing files.
 
 ## Build and run
 

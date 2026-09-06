@@ -5,6 +5,7 @@ enum ConnectionValidationError: LocalizedError, Equatable {
     case insecureURL
     case missingHost
     case missingUsername
+    case missingPassword
 
     var errorDescription: String? {
         switch self {
@@ -12,6 +13,7 @@ enum ConnectionValidationError: LocalizedError, Equatable {
         case .insecureURL: "The server must use HTTPS."
         case .missingHost: "The server address needs a host name."
         case .missingUsername: "Enter the server user name."
+        case .missingPassword: "Enter the server password."
         }
     }
 }
@@ -29,7 +31,13 @@ struct ServerConnection: Equatable, Sendable {
         guard components.user == nil, components.password == nil else {
             throw ConnectionValidationError.invalidURL
         }
-        while components.path.hasSuffix("/") { components.path.removeLast() }
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        if (components.scheme == "https" && components.port == 443)
+            || (components.scheme == "http" && components.port == 80) {
+            components.port = nil
+        }
+        while components.percentEncodedPath.hasSuffix("/") { components.percentEncodedPath.removeLast() }
         components.query = nil
         components.fragment = nil
         guard let url = components.url else { throw ConnectionValidationError.invalidURL }
@@ -53,6 +61,14 @@ struct ServerConnection: Equatable, Sendable {
 
     var origin: URLOrigin { URLOrigin(url: baseURL) }
 
+    /// Deployment paths identify separate libraries even when authentication shares an origin.
+    var serverIdentity: String { ServerIdentity.canonical(baseURL.absoluteString) }
+
+    func owns(serverIdentity: String, accountUsername: String?) -> Bool {
+        // Legacy records stay unassigned. Merely connecting is not evidence of ownership.
+        accountUsername == username && ServerIdentity.canonical(serverIdentity) == self.serverIdentity
+    }
+
     func resolve(serverPath: String) throws -> URL {
         guard let candidate = URL(string: serverPath, relativeTo: baseURL)?.absoluteURL,
               origin.matches(candidate) else {
@@ -64,6 +80,25 @@ struct ServerConnection: Equatable, Sendable {
     func authorizationHeader() -> String {
         let bytes = Data("\(username):\(password)".utf8)
         return "Basic \(bytes.base64EncodedString())"
+    }
+}
+
+enum ServerIdentity {
+    static func canonical(_ address: String) -> String {
+        guard var components = URLComponents(string: address),
+              components.host != nil else { return address }
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        if (components.scheme == "https" && components.port == 443)
+            || (components.scheme == "http" && components.port == 80) {
+            components.port = nil
+        }
+        while components.percentEncodedPath.hasSuffix("/") { components.percentEncodedPath.removeLast() }
+        components.user = nil
+        components.password = nil
+        components.query = nil
+        components.fragment = nil
+        return components.url?.absoluteString ?? address
     }
 }
 

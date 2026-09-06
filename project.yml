@@ -20,7 +20,7 @@ targets:
       properties:
         CFBundleDisplayName: rustyView
         UIApplicationSceneManifest:
-          UIApplicationSupportsMultipleScenes: true
+          UIApplicationSupportsMultipleScenes: false
           UISceneConfigurations: {}
         UIApplicationSupportsIndirectInputEvents: true
         UILaunchScreen: {}

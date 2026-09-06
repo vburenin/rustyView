@@ -15,36 +15,132 @@ cohesive product rather than independent demos.
 - The deployment target is iOS 17. The app is SwiftUI with a custom,
   accessibility-labeled control overlay on an `AVPlayerLayer`; AVFoundation
   still owns decoding, external playback, AirPlay, and Picture in Picture. The
-  player supports tap-to-show controls, three-second auto-hide while playing,
+  player supports tap-to-show controls, three-second auto-hide while playing
+  except when accessibility text sizes or assistive interaction need them visible,
   double-tap left/right and explicit buttons for 10-second seeking, a buffered
   scrubber, speed, fit/fill, audio, captions, chapters, and stream quality. It
   exposes buffering and error states and restarts cleanly after reaching the
   end. It has no third-party runtime dependencies.
 - `project.yml` is the source of truth for the generated Xcode project. Run
   `xcodegen generate` after changing targets, resources, or build settings.
-- `AppModel` owns connection settings, the API client, library state, playback,
-  and downloads. It deliberately forwards each child model's change publisher
+- `AppModel` owns connection settings, the API client, browsing state, cached
+  movie metadata, the user library, playback preferences, playback, and downloads.
+  It deliberately forwards each child model's change publisher
   because SwiftUI does not observe nested `ObservableObject` instances by
   itself.
 - Connection edits use an isolated API probe before committing Keychain and app
   state. Blank passwords may reuse the saved secret only for the same origin and
-  account. Artwork caches include server and account identity, with at most four
-  active artwork requests. Offline downloads remain reachable after forgetting
-  the connection. Search errors and caption responses obey request ownership.
+  account. `ArtworkPipeline` owns at most four active artwork requests, removes
+  cancelled waiters immediately, and decodes thumbnails with ImageIO off the
+  main actor. Its cache includes server/account identity and charges actual
+  raster bytes; remote thumbnails have a maximum edge of 1024 pixels. Requests
+  capture their account before admission, and model generations reject late
+  images and errors after cancellation or replacement. Offline downloads remain
+  reachable after forgetting the connection. Search errors and caption responses
+  obey request ownership.
+  Typed recovery distinguishes rejected credentials, missing or unavailable
+  Keychain data, offline transport, TLS, server compatibility, and storage.
+  Forget Connection changes live state only after credential deletion succeeds;
+  cancelling a connection probe cannot commit its eventual reply.
 - Streaming first attempts an authenticated original where appropriate, then
   recovers through server-prepared HLS and, if a copied stream still fails, a
   forced portable H.264/AAC rendition. A non-Auto quality choice always uses
   the prepared route so the explicit choice is not ignored. A non-default
   audio selection also enters the prepared route, ensuring the chosen server
-  track is honored instead of silently playing the source default. AVFoundation
-  authentication is supplied through the asset resource loader and is confined
-  to the configured server origin. Prepared EVENT playlists are treated as
+  track is honored instead of silently playing the source default. Online media
+  reaches AVFoundation through an attempt-owned loopback relay; its upstream
+  URLSession holds immutable authentication and enforces the server origin before
+  following redirects or playlist references. Prepared EVENT playlists are treated as
   moving seek windows: a scrub outside the advertised window starts a fresh
   prepared stream at the requested global time. A bounded startup watchdog
   retries or falls back instead of leaving the player stuck on Preparing.
+  Each viewing session retains its original connection, a stable server session
+  and increasing prepared generations. Replacement/close cancels the exact old
+  generation; a bounded heartbeat retains paused/buffered prepared output.
+  Transport labels follow user intent, and the progress watchdog also detects
+  ready-but-motionless items and later stalls. Terminal playback has Retry
+  Current Playback and Close without dropping explicit quality or pause intent.
 - Browsing supports the flat movie library and navigable server folders, with
   breadcrumbs, debounced search, server sorting, paging, and stale-response
-  suppression.
+  suppression. Browse locations include server, account, folder/view, query,
+  and sort. Bounded in-memory snapshots retain entries and visible anchors for
+  returning navigation; mode and sort preferences persist by account. A pending
+  destination has explicit loading feedback and does not relabel old results.
+- Movie presentation metadata is independent of wire DTOs and cached by canonical
+  server/account/movie identity. Local details and artwork use owned files without
+  requests. A source-aware playback request routes local and online Watch/chapter
+  actions explicitly; online quality/audio settings cannot be ignored because a
+  local copy exists. Local AVFoundation media-selection groups expose included
+  audio/captions; server indices are not reused as local track identifiers.
+- `UserLibraryStore` is the authoritative production owner of favorites,
+  viewing history, and resume state. Its atomic `UserLibrary/library.json`
+  persists stable movie metadata and exact `MovieLibraryKey` ownership. The
+  legacy progress defaults are imported once without being erased or assigning
+  unknown accounts. An existing unreadable new index blocks import and writes;
+  recovery retries preserve both the index and unsaved user actions.
+  A file actor commits ordered mutations away from the main actor. The main
+  actor publishes optimistic entries/history and storage errors. Required
+  Start Over commits roll back only their tentative intent on failure, retaining
+  newer unrelated edits. History and non-favorite entries are bounded to 500;
+  favorites are not automatically evicted.
+- Playback sends activity through `PlaybackActivityStore`, using a stable
+  viewing UUID distinct from callback/session generations. Only actual time
+  advancement starts a history entry. Retry, fallback, seeks, and settings
+  changes retain that viewing; Replay starts another. Actual playback end marks
+  completion independently of resume trimming. `ResumePolicy` excludes the first
+  5% up to 30 seconds and final 5% up to 90 seconds, allowing short movies to
+  resume. Unknown runtime cannot erase an existing usable position. Resume waits
+  for restoration, and Start Over waits for a durable commit before replacing
+  the player, then rechecks request and account ownership. The legacy adapter is
+  only a standalone-test compatibility boundary; production never dual-writes it.
+- Continue Watching, Favorites, and History use the shared user library.
+  History displays only the latest viewing per canonical movie key; repeated
+  sessions remain in storage, while different servers/accounts stay separate.
+  Its list identity is the movie key rather than an individual viewing UUID.
+  Saved Watch chooses an exact ready local copy before considering the owning
+  online connection. Missing remote media or explicit local deletion does not
+  remove favorites/history. Local resume and remaining time use inspected media
+  duration. Downloads presents locally stored posters/details, search, and sort,
+  with ready copies separate from stored limitations and transfer attention.
+- Subtitle selection separates requested/loading, active, failed, and Off
+  states. Server and owned sidecar loads are cancellable and scoped to the
+  logical viewing and selection; late bytes cannot undo Off or another movie.
+  Failed choices retain an explicit Retry target. WebVTT parsing runs off the
+  main actor, decodes references after removing markup, rejects invalid time
+  fields, and renders overlapping active cues together. Actual AVFoundation
+  legible groups provide native selection; server indices never stand in for
+  native options. The player discloses that app-rendered text is absent from
+  Picture in Picture and AirPlay video before allowing that output transition.
+- `PlaybackSystemController` owns audio-session notifications, removable remote
+  command targets, and Now Playing. Interruption state survives pending durable
+  Start Over and Resume restoration. Resume permission belongs to one logical
+  viewing and unchanged user intent; a later viewer cannot inherit it. Audio
+  device removal pauses. Media-services reset recreates the AVPlayer at the
+  retained time with the current native selection, paused until explicit Play.
+  Now Playing uses observed elapsed time and effective rate; old command leases
+  and old cleanup cannot control or clear a newer owner. Close removes targets
+  and deactivates the current audio session with notifyOthersOnDeactivation.
+  Notification and command-boundary tests use real decoded local media;
+  physical interruption/output behavior remains part of the device checklist.
+- Keyboard controls use Space for play/pause, arrows for real ten-second seeks,
+  and O for Playback Options. The options sheet owns its UIKit first responder
+  and canonical Escape command; dismissal restores the player's keyboard focus.
+  The iOS 26.5 dedicated iPhone Simulator delivered ordinary keys and the
+  diagnostic sheet command, but injected Escape produced no player press callback
+  and also failed to close UIKit's native Sort menu. Adding a literal Escape
+  command did not change that result. Keep positive transport coverage separate
+  from the Escape test's native-runtime control, and report its skip explicitly.
+  Actual Escape dismissal on an iPad hardware keyboard remains unverified.
+- Accessibility-size player controls remain visible until explicitly dismissed.
+  Chapter titles occupy their own row in the player and both options sheets,
+  with time/current status below.
+- `PlaybackPreferences` persists preferred quality and audio language, separately
+  from each movie's track index. Player streaming options are an isolated draft
+  with Apply/Cancel and consistent Original/quality choices. A missing preferred
+  profile resolves to Auto with a visible notice without changing the preference.
+  Saved-row and detail requests fetch unknown profiles through a captured
+  connection without mutating browse state; the active player retains those
+  profiles and the notice across automatic recovery.
 - Compatible offline downloads use a background `URLSession`, install a
   self-contained MP4 into Application Support, update an atomic manifest, and
   play from a local file URL without recontacting the server. Manifest records
@@ -62,12 +158,49 @@ cohesive product rather than independent demos.
   polls its generation-scoped status and shows exact prepared media time
   against the known runtime on both movie details and Downloads; it falls back
   to byte progress against older servers and never labels unknown-size work as
-  zero percent. Cellular downloads are allowed by default; the persisted
+  zero percent. Preparation completion is separate from file delivery: keep
+  received bytes visible and switch to transfer progress when preparation ends.
+  A ready generation may use up to three header-only requests to its exact
+  retained media URL to learn the final output size through the shared poller;
+  never substitute source size or restart the transfer to obtain a total.
+  Cellular downloads are allowed by default; the persisted
   Settings choice can restrict current and future movie downloads to Wi-Fi.
   The rendition menu is the final download decision: selecting Compatible copy
   or Original file must enqueue immediately, without a second confirmation.
   Active rows navigate to movie details; nested cancel controls must use an
   isolated button style so a row tap can never cancel a download.
+- A versioned atomic download queue records intent before system task creation,
+  retains permanent failures and exhausted retries across relaunch, and uses
+  removal tombstones to reject late cancelled completions. Completed files and
+  queue entries carry canonical server identity and explicit account ownership;
+  unassigned legacy copies remain accessible without authorizing new requests.
+  Progress uses the same canonical server/account boundary and migrates equivalent
+  legacy URL keys by newest update without claiming unknown accounts.
+- Offline readiness requires local AVAsset/sample inspection as well as byte
+  integrity. Compatible garbage or truncated output never becomes Ready to Watch.
+  Unsupported originals remain visibly stored; a compatible copy can coexist
+  without deleting them. Catalog duration alone is not evidence of truncation.
+  Legacy inspection runs off the main actor, and cancellation is checked again
+  after inspection before the serialized installation commit.
+- The versioned download state index owns queue, completed packages, receipts,
+  and recoverable install/delete transactions. A storage actor performs inspection
+  and file work; background delegate delivery first takes durable ownership of its
+  temporary file. Required captions join the media transaction, artwork is optional,
+  and cancelled/failed assembly cannot publish a partially complete package.
+  Corrupt-index recovery preserves the damaged index and inventories owned files.
+  Storage totals count managed physical files once, including incoming resources.
+- Background session ownership starts independently of sign-in. Sessions are
+  isolated by HTTPS origin and cellular policy; OS completion handlers are keyed
+  by session and released after durable processing. At most two resource transfers
+  run by default, with a shared bounded optional preparation-status polling budget.
+  Pause and policy changes use opaque URLSession resume data encrypted under a
+  device-only Keychain key and bound to the original account/job/resource. Retry
+  deadlines survive policy changes. Whole-file Content-Range validation handles
+  resumed bytes; unknown-total growing output never becomes a completed file.
+- Foreground requests capture immutable authentication ownership per request.
+  Background confinement tests use actual trusted and hostile TLS origins,
+  including a previously warmed foreign-origin connection; redirect delegate
+  methods alone do not establish background-session confinement.
 - The UI-test target contains only generated H.264/AAC MP4 and MPEG-TS media.
   Each UI test must use a unique background-session and offline-store namespace,
   and must terminate the test-launched app during teardown. Tests must never
@@ -182,14 +315,30 @@ to an untrusted origin.
 - Use poster artwork where available and a deliberate placeholder otherwise.
   Load and cache images with bounded concurrency and cancellation.
 - On compact-width phones, keep the three-column poster grid only through the
-  default Dynamic Type size. Larger text categories must use wider two-column
-  portrait cards with unconstrained vertical title space so titles cannot draw
-  over runtime or resolution metadata. Accessibility-size tests must use the
-  real UIKit content-size category raw values and assert layout geometry.
+  default Dynamic Type size, then use two columns for larger standard sizes.
+  Accessibility sizes use full-width cards with smaller artwork and unrestricted
+  titles; the font-size review exposed fragmented words in two-column cards.
+  Titles must never draw over runtime or resolution metadata. Font-size tests
+  must use the real UIKit content-size category raw values and assert geometry.
 - Keep selected item, browse position, and playback state stable across iPhone
   rotation and iPad split-view changes.
 - Display human-readable titles first, with technical stream information as
   secondary detail. Do not expose server filesystem paths.
+- Keep routine screens concise: show the title, one primary action, and the
+  essential status. Put secondary actions in a labeled icon menu and technical
+  output descriptions in an optional disclosure. Never squeeze titles or wrap
+  action labels into fragments to fit more controls into a row. Download choices
+  still show size, compatibility, and any lost HDR, audio, or subtitle features
+  before the final selection.
+- Prioritize compact layouts at default and moderately larger text sizes.
+  Keep Dynamic Type functional, but do not expand routine UI or pursue an
+  exhaustive maximum-font redesign at the expense of that primary experience.
+- Downloads shows one row per canonical server/account/movie identity. Original
+  and compatible files remain separate stored copies managed through optional
+  copy actions; never delete a rendition merely to simplify the collection.
+  A Continue Watching link must not duplicate the same movie inline. At
+  accessibility text sizes, give collection titles the full available width
+  and omit decorative posters when they would crowd the title or actions.
 - Prefer familiar labels such as Watch, Download, Audio, Subtitles, and Quality;
   keep terms such as remux, MIME, and transcode inside optional technical detail.
 - Every long-running action needs immediate feedback, useful progress where it
@@ -199,8 +348,9 @@ to an untrusted origin.
   low-storage, and no-download states each need purposeful UI rather than a
   blank list or generic alert.
 - Persist favorites, recents, resume positions, and download state locally.
-  Namespace them by normalized server identity plus media ID so another server
-  cannot collide.
+  Namespace them by canonical server/deployment identity, exact account, and
+  decimal-string media ID. Preserve nil-account legacy data as unassigned.
+  Removing a local file must not erase its favorite, metadata, or viewing history.
 
 ## Streaming and codec strategy
 
@@ -273,7 +423,9 @@ or resolution; show the chosen offline format and estimated size to the user.
 
 ## Authentication and transport security
 
-- Require HTTPS outside explicit debug-only localhost development.
+- Require HTTPS for server requests outside explicit debug-only localhost
+  development. The app's private media relay binds only to `127.0.0.1` and never
+  sends server credentials to its local HTTP clients.
 - Keep Basic-auth material in Keychain with an appropriate accessible class;
   do not copy it into `UserDefaults` or SwiftData.
 - Prefer an authentication challenge handler over embedding credentials in a
@@ -283,6 +435,36 @@ or resolution; show the chosen offline format and estimated size to the user.
   offline state, TLS failures, server incompatibility, and missing media need
   distinct user-facing recovery paths.
 - Never weaken App Transport Security globally.
+- Native AVFoundation authentication callbacks do not establish exact-origin
+  confinement: anonymous redirects, playlist/key/map references and a warmed
+  connection to another port require real URL-loading tests. `forbidCrossSite`
+  alone is not an origin boundary.
+- `AuthenticatedMediaAsset` awaits an actual loopback listener URL before asset
+  creation. Progressive media uses `forbidAll` references; a custom-scheme
+  redirect bootstrap is incompatible with that restriction. The owned upstream
+  session uses normal TLS validation, no shared credentials or cookies, and at
+  most five same-origin redirect hops. Foreign redirects fail before fetching.
+- Each HLS response, including EVENT refreshes, must pass strict URI rewriting
+  before reaching AVFoundation. Inspect body bytes as well as Content-Type so
+  a playlist cannot hide behind a media extension. Reject unexpected resource
+  kinds and unknown or ambiguous URI-bearing syntax. Local URLs contain opaque
+  in-memory capabilities, never server paths, query tokens or credentials.
+- Keep complete EVENT route registrations for the playback attempt, including
+  URLs held by paused or seeking players. Bound aggregate playlist/URL bytes,
+  accepted sockets, active/queued requests and retained media buffers. Stream
+  movies incrementally with backpressure; Foundation/AVFoundation buffers need
+  separate measured memory checks. Cancellation closes upstream tasks and local
+  sockets and removes queued work. Terminal trust failures bypass playback
+  fallback so a hostile source is not repeatedly retried.
+- Assert terminal trust handling at both ownership boundaries: the asset wrapper
+  reports one typed rejection, and the actual `PlaybackModel` leaves Preparing,
+  pauses output and exposes its failed state without a retry or format fallback.
+  AVFoundation may keep an HLS item unknown while retrying an interrupted local
+  request; `AVPlayerItem.status == .failed` is not the product's error boundary.
+- Online relay playback cannot promise AirPlay remote-video URL handoff. Show
+  its output limitation before selection and provide Screen Mirroring guidance;
+  local playback retains native output policy. PiP, output routes and background
+  behavior still need real-device verification.
 
 ## Playback experience
 
@@ -305,6 +487,11 @@ or resolution; show the chosen offline format and estimated size to the user.
 - Integrate Now Playing and remote transport commands. Resume positions should
   be updated periodically and on pause/background/end, using media duration to
   avoid saving near-start or near-end noise.
+- Keep activity intent separate from viewing evidence. A pending player, failed
+  asset, or seek alone cannot create history. Start Over must save durably before
+  replacing the current player; a stale callback cannot restore the old bookmark.
+  Use the shared resume policy for legacy adapters, library presentation, and
+  playback. A prepared EVENT seek window is never authoritative global runtime.
 - Preserve playback intent and global time when switching from original to a
   prepared stream. Cancel superseded network/transcode work.
 - Surface buffering and errors without obscuring navigation or trapping the
@@ -358,6 +545,34 @@ Treat the manually operated `iPhone 17` Simulator as the owner's current-build
 preview: after a verified app change, install and launch the new build there
 when doing so will not interrupt an active download. Preserve its app data
 across installs. It is not an automation destination.
+
+The real background and native-media TLS origin checks need the generated fixture
+server running on the Mac. After building and installing the app on the booted
+dedicated test iPhone, use its UDID and the built app path:
+
+```sh
+python3 scripts/https_origin_fixture.py \
+  --simulator DEDICATED_TEST_IPHONE_UDID \
+  --app /tmp/rustyView-review-gate/Build/Products/Debug-iphonesimulator/rustyView.app \
+  --directory /tmp/rustyView-tls-origin-fixture
+```
+
+Keep that process running during the test command, then stop it with Ctrl-C.
+The script only accepts the booted dedicated test iPhone, generates a one-day
+test CA and keys under `/tmp`, and installs its trust anchor only there. No
+certificate-validation bypass is added to the app. The TLS tests explicitly
+skip when the fixture descriptor is absent; a skipped test is not origin proof.
+The fixture logs no request URLs, headers, credentials, or media metadata.
+Its native controls use actual MP4/HLS playback, seeking, encrypted keys and
+fragmented MP4 maps. OpenSSL and FFmpeg generate additional synthetic media only
+under the temporary fixture directory. Hostile tests count foreign requests and
+credentials separately, including same-host/different-port redirects, nested
+playlists, key/map attributes, disguised playlist bodies and changed EVENT
+refreshes. Hostile cases require a typed wrapper rejection and the actual player
+model's terminal failure, alongside zero foreign requests and credentials.
+Complete-byte and slow-reader checks supplement first-frame playback. The native
+and relay suites contain 20 focused cases; run them serially on the dedicated
+Simulator so cloned test devices cannot silently skip the installed TLS fixture.
 
 If that exact simulator is unavailable, select an installed recent iPhone
 runtime and record the destination used. Add focused tests for DTO decoding,

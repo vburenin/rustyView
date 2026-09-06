@@ -232,7 +232,7 @@ struct AudioTrack: Codable, Identifiable, Hashable, Sendable {
     }
 
     var technicalLabel: String {
-        let channelLabel = channels > 2 ? "\(channels) ch" : "Stereo"
+        let channelLabel = channels > 2 ? "\(channels) ch" : channels == 2 ? "Stereo" : channels == 1 ? "Mono" : "Channels unknown"
         return "\(codec.uppercased()) · \(channelLabel)"
     }
 

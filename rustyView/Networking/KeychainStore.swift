@@ -7,14 +7,20 @@ protocol SecretStoring {
     func remove(account: String) throws
 }
 
-enum KeychainError: LocalizedError {
+enum KeychainError: LocalizedError, Equatable {
     case unexpectedStatus(OSStatus)
     case invalidData
 
     var errorDescription: String? {
         switch self {
-        case .unexpectedStatus(let status): "Keychain operation failed (\(status))."
-        case .invalidData: "The stored credential is invalid."
+        case .unexpectedStatus(let status):
+            switch status {
+            case errSecInteractionNotAllowed, errSecNotAvailable:
+                "Your saved password is temporarily unavailable. Unlock the device and try again."
+            default:
+                "The device could not access or update the saved password. Try again, or enter the password again."
+            }
+        case .invalidData: "The saved password could not be read. Enter it again to reconnect."
         }
     }
 }

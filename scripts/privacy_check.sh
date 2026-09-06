@@ -57,7 +57,7 @@ report_regex_matches() {
 
 is_allowed_public_host() {
     case "$1" in
-        example|*.example|example.com|*.example.com|example.test|*.example.test|invalid|*.invalid|localhost|127.0.0.1|www.apple.com|www.apache.org)
+        example|*.example|example.com|*.example.com|example.test|*.example.test|invalid|*.invalid|localhost|127.0.0.1|www.apple.com|developer.apple.com|www.apache.org)
             return 0
             ;;
         *)
@@ -154,13 +154,13 @@ while IFS= read -r -d '' file; do
     fi
 
     case "$file" in
-        *.pem|*.p12|*.mobileprovision|*.sqlite|*.sqlite-shm|*.sqlite-wal|*.realm|*.log|*.xcuserstate|*.mkv|*.avi|*.mov|*.m4v|*.webm)
+        *.pem|*.p12|*.mobileprovision|*.sqlite|*.sqlite-shm|*.sqlite-wal|*.realm|*.log|*.xcuserstate|*.mkv|*.avi|*.mov|*.m4v)
             report_match "$file" "-" "sensitive or user-generated file type must not be committed"
             continue
             ;;
-        *.mp4|*.ts)
+        *.mp4|*.ts|*.webm)
             case "$file" in
-                rustyViewUITests/Fixtures/synthetic-playback.mp4|rustyViewUITests/Fixtures/synthetic-playback.ts)
+                rustyViewUITests/Fixtures/synthetic-playback.mp4|rustyViewUITests/Fixtures/synthetic-playback.ts|rustyViewUITests/Fixtures/synthetic-multiaudio.mp4|rustyViewUITests/Fixtures/synthetic-native-caption.mp4|rustyViewUITests/Fixtures/synthetic-stall-0.ts|rustyViewUITests/Fixtures/synthetic-stall-1.ts|rustyViewUITests/Fixtures/synthetic-stall-2.ts|rustyViewTests/Fixtures/synthetic-offline-valid.mp4|rustyViewTests/Fixtures/synthetic-offline-unsupported.webm|rustyViewTests/Fixtures/synthetic-native-tracks.mp4)
                     ;;
                 *)
                     report_match "$file" "-" "media is not an explicitly reviewed synthetic test fixture"

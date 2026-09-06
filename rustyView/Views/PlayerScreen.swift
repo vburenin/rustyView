@@ -4,6 +4,10 @@ import SwiftUI
 struct PlayerScreen: View {
     @EnvironmentObject private var app: AppModel
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @FocusState private var keyboardFocus: Bool
+    @AccessibilityFocusState private var assistiveFocus: PlayerControl?
     @State private var showingDetails = false
     @State private var controlsVisible = true
     @State private var isScrubbing = false
@@ -11,9 +15,13 @@ struct PlayerScreen: View {
     @State private var seekFeedback: SeekDirection?
     @State private var feedbackTask: Task<Void, Never>?
     @State private var autoHideTask: Task<Void, Never>?
+    @State private var usingKeyboard = false
+    @State private var switchControlEnabled = UIAccessibility.isSwitchControlRunning
+    @State private var showingSubtitleOutputWarning = false
+    @State private var showingAirPlayExplanation = false
     @StateObject private var pictureInPicture = PlayerPictureInPictureController()
 
-    var body: some View {
+    private var playerSurface: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
@@ -30,13 +38,14 @@ struct PlayerScreen: View {
                 onDoubleTapForward: { skip(.forward, revealControls: false) }
             )
             .ignoresSafeArea()
+            .allowsHitTesting(app.player.errorMessage == nil)
 
-            if controlsVisible {
+            if controlsVisible && app.player.errorMessage == nil {
                 controls
                     .transition(.opacity)
             }
 
-            if let subtitle = app.player.currentSubtitle {
+            if !controlsVisible, let subtitle = app.player.currentSubtitle {
                 subtitleView(subtitle)
             }
 
@@ -44,25 +53,27 @@ struct PlayerScreen: View {
                 SeekFeedbackView(direction: seekFeedback)
                     .frame(maxWidth: .infinity, alignment: seekFeedback.alignment)
                     .padding(.horizontal, 36)
-                    .transition(.scale.combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
                     .allowsHitTesting(false)
             }
 
-            if app.player.isPreparing {
-                ProgressView("Preparing video…")
+            if !controlsVisible && app.player.isPreparing {
+                ProgressView(app.player.preparationMessage)
                     .tint(.white)
                     .foregroundStyle(.white)
                     .padding()
                     .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 12))
+                    .allowsHitTesting(false)
                     .accessibilityAddTraits(.updatesFrequently)
             }
 
-            if app.player.isBuffering && !app.player.isPreparing {
+            if !controlsVisible && app.player.isBuffering && !app.player.isPreparing {
                 ProgressView()
                     .controlSize(.large)
                     .tint(.white)
                     .padding(18)
                     .background(.black.opacity(0.68), in: Circle())
+                    .allowsHitTesting(false)
                     .accessibilityLabel("Buffering video")
                     .accessibilityAddTraits(.updatesFrequently)
             }
@@ -71,10 +82,22 @@ struct PlayerScreen: View {
                 playbackError(message)
             }
         }
+    }
+
+    private var playerTransportView: some View {
+        playerSurface
         .preferredColorScheme(.dark)
         .statusBarHidden()
+        .focusable()
+        .focused($keyboardFocus)
+        .focusEffectDisabled()
+        .onKeyPress(keys: playerKeyboardKeys, phases: [.down, .repeat]) { press in
+            handleKeyPress(press)
+        }
         .onAppear {
             scrubberTime = app.player.currentTime
+            keyboardFocus = true
+            updatePictureInPicturePolicy()
             scheduleAutoHide()
         }
         .onDisappear {
@@ -89,36 +112,112 @@ struct PlayerScreen: View {
                 scheduleAutoHide()
             } else {
                 autoHideTask?.cancel()
-                withAnimation(.easeOut(duration: 0.15)) { controlsVisible = true }
+                withAnimation(controlAnimation) { controlsVisible = true }
             }
         }
         .onChange(of: app.player.isPreparing) { _, preparing in
             if !preparing { scheduleAutoHide() }
         }
+    }
+
+    private var playerAccessibilityView: some View {
+        playerTransportView
         .onChange(of: voiceOverEnabled) { _, enabled in
             if enabled { controlsVisible = true }
             scheduleAutoHide()
         }
-        .sheet(isPresented: $showingDetails) {
+        .onChange(of: dynamicTypeSize) { _, size in
+            if size.isAccessibilitySize { controlsVisible = true }
+            scheduleAutoHide()
+        }
+        .onChange(of: assistiveFocus) { _, focus in
+            if focus != nil { controlsVisible = true }
+            scheduleAutoHide()
+        }
+        .onChange(of: showingDetails) { _, showing in
+            if showing { keyboardFocus = false }
+            controlsVisible = true
+            scheduleAutoHide()
+        }
+        .onChange(of: app.player.requiresSubtitleOutputAcknowledgement) { _, _ in
+            updatePictureInPicturePolicy()
+        }
+        .onChange(of: app.player.subtitleSelection) { _, selection in
+            controlsVisible = true
+            scheduleAutoHide()
+            if case .failed(_, let message) = selection {
+                UIAccessibility.post(notification: .announcement, argument: message)
+            }
+        }
+        .onChange(of: app.player.systemPlaybackNotice) { _, notice in
+            if let notice {
+                controlsVisible = true
+                UIAccessibility.post(notification: .announcement, argument: notice)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIAccessibility.switchControlStatusDidChangeNotification)) { _ in
+            switchControlEnabled = UIAccessibility.isSwitchControlRunning
+            if switchControlEnabled { controlsVisible = true }
+            scheduleAutoHide()
+        }
+    }
+
+    var body: some View {
+        playerAccessibilityView
+        .sheet(isPresented: $showingDetails, onDismiss: { keyboardFocus = true }) {
             if let item = app.player.item {
-                PlaybackOptionsView(item: item)
-                    .presentationDetents([.medium, .large])
+                PlaybackOptionsView(item: item, mode: app.player.mode, quality: app.player.selectedQuality)
+                    .presentationDetents(dynamicTypeSize.isAccessibilitySize ? [.large] : [.medium, .large])
             } else {
                 LocalPlaybackOptionsView()
-                    .presentationDetents([.height(260)])
+                    .presentationDetents(dynamicTypeSize.isAccessibilitySize ? [.large] : [.medium, .large])
             }
         }
         .alert(
             "Picture in Picture unavailable",
-            isPresented: Binding(
-                get: { pictureInPicture.errorMessage != nil },
-                set: { if !$0 { pictureInPicture.errorMessage = nil } }
-            )
+            isPresented: pictureInPictureErrorPresented
         ) {
             Button("OK") { pictureInPicture.errorMessage = nil }
         } message: {
             Text(pictureInPicture.errorMessage ?? "Please try again.")
         }
+        .alert("Subtitles stay in rustyView", isPresented: $showingSubtitleOutputWarning) {
+            Button("Start Without Subtitles") { pictureInPicture.toggle() }
+            Button("Keep Watching Here", role: .cancel) {}
+        } message: {
+            Text("These subtitles won’t appear in Picture in Picture. They’ll return when you reopen the player.")
+        }
+        .alert("AirPlay", isPresented: $showingAirPlayExplanation) {
+            if app.player.mediaOutputPolicy.allowsExternalPlayback,
+               app.player.requiresSubtitleOutputAcknowledgement {
+                Button("Turn Subtitles Off") { app.player.turnSubtitlesOff() }
+            }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(app.player.mediaOutputPolicy.explanation
+                 ?? "Turn subtitles off to use AirPlay video.")
+        }
+        .alert("Viewing progress needs attention", isPresented: requestErrorPresented) {
+            Button("OK") { app.player.requestError = nil }
+        } message: { Text(app.player.requestError ?? "Please try again.") }
+    }
+
+    private var playerKeyboardKeys: Set<KeyEquivalent> {
+        showingDetails ? [] : [.space, .leftArrow, .rightArrow, .escape, "o"]
+    }
+
+    private var pictureInPictureErrorPresented: Binding<Bool> {
+        Binding(
+            get: { pictureInPicture.errorMessage != nil },
+            set: { if !$0 { pictureInPicture.errorMessage = nil } }
+        )
+    }
+
+    private var requestErrorPresented: Binding<Bool> {
+        Binding(
+            get: { app.player.requestError != nil },
+            set: { if !$0 { app.player.requestError = nil } }
+        )
     }
 
     private var controls: some View {
@@ -131,12 +230,10 @@ struct PlayerScreen: View {
             .ignoresSafeArea()
             .allowsHitTesting(false)
 
-            VStack(spacing: 0) {
-                topControls
-                Spacer(minLength: 20)
-                centerControls
-                Spacer(minLength: 20)
-                bottomControls
+            ViewThatFits(in: .vertical) {
+                controlContent(compact: false)
+                ScrollView { controlContent(compact: true) }
+                    .accessibilityIdentifier("player-controls-scroll")
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
@@ -144,24 +241,91 @@ struct PlayerScreen: View {
         }
     }
 
+    private func controlContent(compact: Bool) -> some View {
+        VStack(spacing: compact ? 12 : 0) {
+            topControls
+            if app.player.isPreparing {
+                ProgressView(app.player.preparationMessage)
+                    .tint(.white)
+                    .padding(10)
+                    .background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.top, 8)
+            } else if app.player.isBuffering {
+                ProgressView("Buffering video")
+                    .tint(.white)
+                    .padding(10)
+                    .background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.top, 8)
+            }
+            if let notice = app.player.qualityNotice {
+                Text(notice)
+                    .font(.caption)
+                    .foregroundStyle(.white)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.top, 8)
+                    .accessibilityIdentifier("player-quality-notice")
+            }
+            if let notice = app.player.systemPlaybackNotice {
+                Text(notice)
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 8))
+                    .accessibilityIdentifier("player-system-notice")
+            }
+            if !compact { Spacer(minLength: 12) }
+            centerControls
+            if !compact { Spacer(minLength: 12) }
+            if let subtitle = app.player.currentSubtitle { subtitleText(subtitle).padding(.vertical, 8) }
+            bottomControls
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     private var topControls: some View {
+        VStack(spacing: 8) {
+            if dynamicTypeSize.isAccessibilitySize { playerTitle }
+            topControlButtons
+        }
+    }
+
+    private var playerTitle: some View {
+        Text(app.player.currentTitle ?? "Now Playing")
+            .font(.headline)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+            .fixedSize(horizontal: false, vertical: true)
+            .foregroundStyle(.white)
+            .accessibilityIdentifier("player-title")
+    }
+
+    private var topControlButtons: some View {
         HStack(spacing: 10) {
             PlayerIconButton(
                 systemName: "xmark",
                 accessibilityLabel: "Close player",
                 action: app.player.stop
             )
+            .accessibilityFocused($assistiveFocus, equals: .close)
 
-            Text(app.player.currentTitle ?? "Now Playing")
-                .font(.headline)
-                .lineLimit(1)
-                .foregroundStyle(.white)
-                .accessibilityIdentifier("player-title")
+            if !dynamicTypeSize.isAccessibilitySize { playerTitle }
 
             Spacer(minLength: 4)
 
-            AirPlayRoutePicker()
-                .frame(width: 44, height: 44)
+            if app.player.mediaOutputPolicy.allowsExternalPlayback && !app.player.requiresSubtitleOutputAcknowledgement {
+                AirPlayRoutePicker()
+                    .frame(width: 44, height: 44)
+                    .accessibilityFocused($assistiveFocus, equals: .airPlay)
+            } else {
+                PlayerIconButton(systemName: "airplay.video", accessibilityLabel: "AirPlay") {
+                    showingAirPlayExplanation = true
+                }
+                .accessibilityHint("Shows availability for this video and its subtitles")
+                .accessibilityFocused($assistiveFocus, equals: .airPlay)
+            }
 
             if AVPictureInPictureController.isPictureInPictureSupported() {
                 PlayerIconButton(
@@ -172,16 +336,22 @@ struct PlayerScreen: View {
                         ? "Stop Picture in Picture"
                         : "Start Picture in Picture"
                 ) {
-                    pictureInPicture.toggle()
+                    if !pictureInPicture.isActive && app.player.requiresSubtitleOutputAcknowledgement {
+                        showingSubtitleOutputWarning = true
+                    } else {
+                        pictureInPicture.toggle()
+                    }
                     noteInteraction()
                 }
                 .disabled(!pictureInPicture.isPossible && !pictureInPicture.isActive)
+                .accessibilityFocused($assistiveFocus, equals: .pictureInPicture)
             }
 
             PlayerIconButton(systemName: "gearshape", accessibilityLabel: "Playback options") {
                 showingDetails = true
                 noteInteraction()
             }
+            .accessibilityFocused($assistiveFocus, equals: .options)
         }
     }
 
@@ -194,22 +364,24 @@ struct PlayerScreen: View {
             ) {
                 skip(.backward, revealControls: true)
             }
+            .accessibilityFocused($assistiveFocus, equals: .backward)
 
             Button {
                 app.player.togglePlayback()
                 noteInteraction()
             } label: {
-                Image(systemName: app.player.isPlaying ? "pause.fill" : "play.fill")
+                Image(systemName: app.player.transport.actionSymbol)
                     .font(.system(size: 31, weight: .semibold))
-                    .offset(x: app.player.isPlaying ? 0 : 2)
+                    .offset(x: app.player.transport.actionSymbol == "play.fill" ? 2 : 0)
                     .frame(width: 72, height: 72)
                     .background(.black.opacity(0.62), in: Circle())
+                    .contentShape(Rectangle())
             }
             .foregroundStyle(.white)
-            .contentShape(Circle())
-            .accessibilityLabel(app.player.isPlaying ? "Pause" : "Play")
+            .accessibilityLabel(app.player.transport.actionLabel)
             .accessibilityHint("Double tap to toggle playback")
             .accessibilityIdentifier("play-pause-control")
+            .accessibilityFocused($assistiveFocus, equals: .playPause)
 
             PlayerIconButton(
                 systemName: "goforward.10",
@@ -218,20 +390,30 @@ struct PlayerScreen: View {
             ) {
                 skip(.forward, revealControls: true)
             }
+            .accessibilityFocused($assistiveFocus, equals: .forward)
         }
     }
 
     private var bottomControls: some View {
         VStack(spacing: 4) {
+            SubtitleFeedbackView()
             HStack(spacing: 10) {
-                Text(PlaybackTimeline.displayTime(scrubberTime))
-                Text("/").foregroundStyle(.white.opacity(0.65))
-                Text(PlaybackTimeline.displayTime(app.player.duration))
-                Spacer()
-                if let chapter = activeChapterTitle {
-                    Text(chapter)
-                        .lineLimit(1)
-                        .foregroundStyle(.white.opacity(0.85))
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        Text(PlaybackTimeline.displayTime(scrubberTime))
+                        Text("/").foregroundStyle(.white.opacity(0.65))
+                        Text(PlaybackTimeline.displayTime(app.player.duration))
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(PlaybackTimeline.displayTime(scrubberTime))
+                        Text("of " + PlaybackTimeline.displayTime(app.player.duration))
+                    }
+                }
+                .layoutPriority(1)
+                Spacer(minLength: 0)
+                if !dynamicTypeSize.isAccessibilitySize, let chapter = activeChapterTitle {
+                    currentChapterLabel(chapter)
                 }
             }
             .font(.caption.monospacedDigit())
@@ -239,6 +421,11 @@ struct PlayerScreen: View {
             .accessibilityElement(children: .combine)
             .accessibilityValue("\(Int(scrubberTime)) seconds elapsed")
             .accessibilityIdentifier("player-time-label")
+
+            if dynamicTypeSize.isAccessibilitySize, let chapter = activeChapterTitle {
+                currentChapterLabel(chapter)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
             PlayerScrubber(
                 value: $scrubberTime,
@@ -253,30 +440,79 @@ struct PlayerScreen: View {
                     noteInteraction()
                 }
             )
+            .accessibilityFocused($assistiveFocus, equals: .position)
 
-            HStack(spacing: 12) {
+            Group {
+                if dynamicTypeSize > .large {
+                    stackedViewingControls
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 12) {
+                            trackControls
+                            Spacer(minLength: 12)
+                            videoSizeButton
+                            speedMenu
+                        }
+                        .fixedSize(horizontal: true, vertical: false)
+                        stackedViewingControls
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func currentChapterLabel(_ chapter: String) -> some View {
+        Text(chapter)
+            .font(.caption)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+            .fixedSize(horizontal: false, vertical: true)
+            .foregroundStyle(.white.opacity(0.85))
+            .accessibilityIdentifier("player-current-chapter")
+    }
+
+    private var stackedViewingControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack { trackControls; Spacer(minLength: 0) }
+            HStack { videoSizeButton; Spacer(minLength: 12); speedMenu }
+        }
+    }
+
+    private var trackControls: some View {
+        HStack(spacing: 12) {
+                if app.player.isOfflinePlayback {
+                    Button { showingDetails = true; noteInteraction() } label: {
+                        Text("Audio").frame(minWidth: 44, minHeight: 44)
+                    }
+                    .accessibilityLabel("Audio track")
+                    .accessibilityFocused($assistiveFocus, equals: .audio)
+                }
                 if let item = app.player.item, !item.audioTracks.isEmpty {
                     audioMenu(item)
                 }
-                if let item = app.player.item, !item.captions.isEmpty {
-                    captionMenu(item)
+                if !app.player.subtitleOptions.isEmpty || app.player.subtitleSelection.requested != nil {
+                    captionMenu
                 }
+        }
+    }
 
-                Spacer()
-
-                Button {
+    private var videoSizeButton: some View {
+        Button {
                     app.player.resizeMode = app.player.resizeMode == .fit ? .fill : .fit
                     noteInteraction()
                 } label: {
-                    Label(app.player.resizeMode.label, systemImage: app.player.resizeMode.icon)
+                    Text(app.player.resizeMode.label)
                         .font(.subheadline.weight(.medium))
                         .frame(minWidth: 44, minHeight: 44)
                 }
                 .foregroundStyle(.white)
                 .accessibilityLabel("Video size: \(app.player.resizeMode.label)")
                 .accessibilityHint("Switches between fitting the whole video and filling the screen")
+                .accessibilityFocused($assistiveFocus, equals: .videoSize)
+    }
 
-                Menu {
+    private var speedMenu: some View {
+        Menu {
                     speedPicker
                 } label: {
                     Text(speedLabel)
@@ -286,8 +522,7 @@ struct PlayerScreen: View {
                 .foregroundStyle(.white)
                 .accessibilityLabel("Playback speed")
                 .accessibilityValue(speedLabel)
-            }
-        }
+                .accessibilityFocused($assistiveFocus, equals: .speed)
     }
 
     private func audioMenu(_ item: MediaItem) -> some View {
@@ -304,48 +539,50 @@ struct PlayerScreen: View {
                 }
             }
         } label: {
-            Label("Audio", systemImage: "waveform")
+            Text("Audio")
                 .font(.subheadline.weight(.medium))
                 .frame(minWidth: 44, minHeight: 44)
         }
         .foregroundStyle(.white)
         .accessibilityLabel("Audio track")
+        .accessibilityFocused($assistiveFocus, equals: .audio)
     }
 
-    private func captionMenu(_ item: MediaItem) -> some View {
+    private var captionMenu: some View {
         Menu {
             Button {
-                Task { await app.player.selectCaption(nil) }
+                app.player.turnSubtitlesOff()
                 noteInteraction()
             } label: {
-                if app.player.selectedCaptionIndex == nil {
+                if app.player.subtitleSelection == .off {
                     Label("Off", systemImage: "checkmark")
                 } else {
                     Text("Off")
                 }
             }
-            ForEach(item.captions) { caption in
+            ForEach(app.player.subtitleOptions) { caption in
                 Button {
-                    Task { await app.player.selectCaption(caption.index) }
+                    Task { await app.player.selectSubtitle(id: caption.id) }
                     noteInteraction()
                 } label: {
-                    if app.player.selectedCaptionIndex == caption.index {
-                        Label(caption.label, systemImage: "checkmark")
+                    if app.player.subtitleSelection.active?.id == caption.id {
+                        Label(caption.selection.label, systemImage: "checkmark")
                     } else {
-                        Text(caption.label)
+                        Text(caption.selection.label)
                     }
                 }
-                .disabled(!caption.isPlayableOnDevice)
+                .disabled(!caption.isAvailable)
             }
         } label: {
-            Image(systemName: app.player.selectedCaptionIndex == nil
+            Image(systemName: app.player.subtitleSelection.active == nil
                   ? "captions.bubble"
                   : "captions.bubble.fill")
-                .frame(width: 44, height: 44)
+                .frame(minWidth: 44, minHeight: 44)
         }
         .foregroundStyle(.white)
         .accessibilityLabel("Subtitles")
-        .accessibilityValue(app.player.selectedCaptionIndex == nil ? "Off" : "On")
+        .accessibilityValue(app.player.subtitleSelection.accessibilityValue)
+        .accessibilityFocused($assistiveFocus, equals: .subtitles)
     }
 
     private var speedPicker: some View {
@@ -367,65 +604,99 @@ struct PlayerScreen: View {
     }
 
     private var activeChapterTitle: String? {
-        guard let item = app.player.item, let index = app.player.currentChapterIndex else { return nil }
-        return item.chapters.first(where: { $0.index == index })?.title
+        guard let index = app.player.currentChapterIndex else { return nil }
+        return app.player.chapters.first(where: { $0.id == index })?.title
     }
 
     private func subtitleView(_ subtitle: String) -> some View {
         VStack {
             Spacer()
-            Text(subtitle)
+            subtitleText(subtitle).padding(.horizontal, 24).padding(.bottom, 24)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func subtitleText(_ subtitle: String) -> some View {
+        Text(subtitle)
                 .font(.body.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.white)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 7))
                 .shadow(radius: 2)
-                .padding(.horizontal, 24)
-                .padding(.bottom, controlsVisible ? 132 : 24)
-                .animation(.easeOut(duration: 0.15), value: controlsVisible)
-        }
-        .allowsHitTesting(false)
-        .accessibilityLabel("Subtitles: \(subtitle)")
+                .accessibilityLabel("Subtitles: \(subtitle)")
     }
 
     private func playbackError(_ message: String) -> some View {
+        ScrollView {
         VStack(spacing: 16) {
             Image(systemName: "exclamationmark.triangle.fill").font(.largeTitle)
             Text("Playback couldn't continue").font(.headline)
             Text(message).font(.subheadline).multilineTextAlignment(.center)
-            if let retryLabel = app.player.retryLabel {
-                Button(retryLabel) { app.player.retryCompatible() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color("AccessibleAccent"))
+            Text("At \(PlaybackTimeline.displayTime(app.player.currentTime))")
+                .font(.subheadline.monospacedDigit())
+                .accessibilityIdentifier("player-error-position")
+                .accessibilityValue("\(Int(app.player.currentTime)) seconds")
+            Button { app.player.retryCurrentPlayback() } label: {
+                Text("Retry").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
             }
+                .accessibilityLabel("Retry Current Playback")
+                .buttonStyle(.borderedProminent)
+                .tint(Color("ActionFill"))
+                .keyboardShortcut(.defaultAction)
+                .accessibilityFocused($assistiveFocus, equals: .retry)
+            if let retryLabel = app.player.retryLabel {
+                Button { app.player.retryCompatible() } label: {
+                    Text(retryLabel).frame(minHeight: 44).contentShape(Rectangle())
+                }
+                    .buttonStyle(.bordered)
+                    .accessibilityFocused($assistiveFocus, equals: .compatibleRetry)
+            }
+            Button { app.player.stop() } label: {
+                Text("Close").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+            }
+                .buttonStyle(.bordered)
+                .accessibilityFocused($assistiveFocus, equals: .errorClose)
         }
         .foregroundStyle(.white)
         .padding(24)
         .background(.black.opacity(0.88), in: RoundedRectangle(cornerRadius: 18))
         .padding()
+        }
     }
 
     private func toggleControls() {
-        withAnimation(.easeOut(duration: 0.15)) { controlsVisible.toggle() }
+        usingKeyboard = false
+        guard !voiceOverEnabled, !switchControlEnabled, assistiveFocus == nil else {
+            controlsVisible = true
+            return
+        }
+        withAnimation(controlAnimation) { controlsVisible.toggle() }
         if controlsVisible { scheduleAutoHide() } else { autoHideTask?.cancel() }
     }
 
     private func noteInteraction() {
         if !controlsVisible {
-            withAnimation(.easeOut(duration: 0.15)) { controlsVisible = true }
+            withAnimation(controlAnimation) { controlsVisible = true }
         }
         scheduleAutoHide()
     }
 
     private func scheduleAutoHide() {
         autoHideTask?.cancel()
-        guard !voiceOverEnabled, app.player.isPlaying, !isScrubbing, app.player.errorMessage == nil else { return }
+        guard !dynamicTypeSize.isAccessibilitySize, !voiceOverEnabled, !switchControlEnabled,
+              assistiveFocus == nil, !usingKeyboard,
+              !showingDetails, !subtitleNeedsAttention, app.player.systemPlaybackNotice == nil,
+              app.player.isPlaying, !isScrubbing, app.player.errorMessage == nil else { return }
         autoHideTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled, app.player.isPlaying, !isScrubbing else { return }
-            withAnimation(.easeOut(duration: 0.2)) { controlsVisible = false }
+            guard !Task.isCancelled, app.player.isPlaying, !isScrubbing, !showingDetails,
+                  !dynamicTypeSize.isAccessibilitySize, !usingKeyboard, !voiceOverEnabled,
+                  !switchControlEnabled, assistiveFocus == nil,
+                  !subtitleNeedsAttention, app.player.systemPlaybackNotice == nil else { return }
+            withAnimation(controlAnimation) { controlsVisible = false }
         }
     }
 
@@ -433,13 +704,58 @@ struct PlayerScreen: View {
         app.player.skip(by: direction.seconds)
         if revealControls { noteInteraction() }
         feedbackTask?.cancel()
-        withAnimation(.easeOut(duration: 0.12)) { seekFeedback = direction }
+        withAnimation(controlAnimation) { seekFeedback = direction }
         UIAccessibility.post(notification: .announcement, argument: direction.accessibilityLabel)
         feedbackTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(1_500))
             guard !Task.isCancelled else { return }
-            withAnimation(.easeIn(duration: 0.15)) { seekFeedback = nil }
+            withAnimation(controlAnimation) { seekFeedback = nil }
         }
+    }
+
+    private var controlAnimation: Animation? { reduceMotion ? nil : .easeOut(duration: 0.15) }
+
+    private var subtitleNeedsAttention: Bool {
+        switch app.player.subtitleSelection {
+        case .loading, .failed: true
+        case .off, .active: false
+        }
+    }
+
+    private func updatePictureInPicturePolicy() {
+        let needsAcknowledgement = app.player.requiresSubtitleOutputAcknowledgement
+        pictureInPicture.setAllowsAutomaticStart(!needsAcknowledgement)
+        if needsAcknowledgement && pictureInPicture.isActive { pictureInPicture.stop() }
+    }
+
+    private func handleKeyPress(_ press: KeyPress) -> KeyPress.Result {
+        guard press.modifiers.isEmpty else { return .ignored }
+        if showingDetails {
+            if press.key == .escape, press.phase == .down {
+                showingDetails = false
+                return .handled
+            }
+            return .ignored
+        }
+        if press.phase == .repeat && press.key != .leftArrow && press.key != .rightArrow { return .handled }
+        usingKeyboard = true
+        controlsVisible = true
+        switch press.key {
+        case .escape: app.player.stop()
+        case .space:
+            guard app.player.errorMessage == nil else { return .ignored }
+            app.player.togglePlayback()
+        case .leftArrow:
+            guard app.player.errorMessage == nil else { return .ignored }
+            skip(.backward, revealControls: true)
+        case .rightArrow:
+            guard app.player.errorMessage == nil else { return .ignored }
+            skip(.forward, revealControls: true)
+        case "o": showingDetails = true
+        default: return .ignored
+        }
+        scheduleAutoHide()
+        return .handled
     }
 
     private func audioLabel(_ track: AudioTrack, defaultIndex: Int?) -> String {
@@ -447,6 +763,11 @@ struct PlayerScreen: View {
         let defaultText = track.index == defaultIndex ? " · Default" : ""
         return "\(title) · \(track.codec.uppercased()) · \(track.channels) ch\(defaultText)"
     }
+}
+
+private enum PlayerControl: Hashable {
+    case close, airPlay, pictureInPicture, options, backward, playPause, forward, position
+    case audio, subtitles, videoSize, speed, retry, compatibleRetry, errorClose
 }
 
 private enum SeekDirection {
@@ -517,9 +838,9 @@ private struct PlayerIconButton: View {
                 .font(.system(size: diameter >= 56 ? 24 : 17, weight: .semibold))
                 .frame(width: diameter, height: diameter)
                 .background(.black.opacity(0.55), in: Circle())
+                .contentShape(Rectangle())
         }
         .foregroundStyle(.white)
-        .contentShape(Circle())
         .accessibilityLabel(accessibilityLabel)
     }
 }
@@ -606,10 +927,47 @@ private struct LocalPlaybackOptionsView: View {
         NavigationStack {
             Form {
                 speedAndSizeSection
+                Section("Audio") {
+                    if app.player.isLoadingLocalTracks { ProgressView("Reading audio tracks…") }
+                    ForEach(app.player.localAudioTracks) { track in
+                        Button { app.player.selectLocalAudio(track.id) } label: {
+                            trackRow(track, selected: app.player.selectedLocalAudioID == track.id)
+                        }
+                        .accessibilityIdentifier("local-audio-\(track.id)")
+                        .accessibilityValue(app.player.selectedLocalAudioID == track.id ? "Selected" : "Not selected")
+                    }
+                    if let description = app.player.offlineAudioDescription {
+                        Text(description).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                SubtitleOptionsSection(isOffline: true, dismissOnSelection: dismiss.callAsFunction)
+                if !app.player.chapters.isEmpty {
+                    Section("Chapters") {
+                        ForEach(app.player.chapters) { chapter in
+                            Button {
+                                app.player.seek(toGlobalTime: chapter.startSeconds)
+                                dismiss()
+                            } label: {
+                                PlaybackChapterLabel(title: chapter.title, start: chapter.startSeconds,
+                                    isCurrent: chapter.id == app.player.currentChapterIndex)
+                            }
+                            .accessibilityIdentifier("local-chapter-\(chapter.id)")
+                        }
+                    }
+                }
             }
             .navigationTitle("Playback Options")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .background(OptionsKeyboardDismissal(onDismiss: dismiss.callAsFunction).frame(width: 0, height: 0))
+    }
+
+    private func trackRow(_ track: LocalPlaybackTrack, selected: Bool) -> some View {
+        HStack {
+            Text(track.title + (track.isForced ? " · Forced" : "") + (track.isDefault ? " · Default" : ""))
+            Spacer()
+            if selected { Image(systemName: "checkmark") }
         }
     }
 
@@ -634,7 +992,18 @@ private struct LocalPlaybackOptionsView: View {
 private struct PlaybackOptionsView: View {
     @EnvironmentObject private var app: AppModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let item: MediaItem
+    @State private var draft: StreamingSettingsDraft
+
+    init(item: MediaItem, mode: PlaybackMode, quality: String) {
+        self.item = item
+        _draft = State(initialValue: StreamingSettingsDraft(mode: mode, quality: quality))
+    }
+
+    private var profiles: [QualityProfile] {
+        app.player.qualityProfiles ?? app.library.capabilities?.qualityProfiles ?? []
+    }
 
     var body: some View {
         NavigationStack {
@@ -654,33 +1023,75 @@ private struct PlaybackOptionsView: View {
                     }
                 }
                 Section("Streaming") {
-                    Picker("Mode", selection: Binding(
-                        get: { app.player.mode },
-                        set: { app.player.mode = $0 }
-                    )) {
-                        ForEach(PlaybackMode.allCases) { Text($0.label).tag($0) }
+                    if let notice = app.player.qualityNotice {
+                        Text(notice)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("stream-quality-notice")
                     }
-                    Picker("Quality", selection: Binding(
-                        get: { app.player.selectedQuality },
-                        set: { app.player.selectedQuality = $0 }
-                    )) {
-                        ForEach(app.library.capabilities?.qualityProfiles ?? []) { profile in
-                            Text(profile.label).tag(profile.id)
+                    Menu {
+                        Picker("Mode", selection: Binding(
+                            get: { draft.mode },
+                            set: { draft.selectMode($0) }
+                        )) {
+                            ForEach(PlaybackMode.allCases) { Text($0.label).tag($0) }
                         }
+                    } label: {
+                        streamingPreferenceLabel("Mode", value: draft.mode.label)
                     }
+                    .accessibilityIdentifier("stream-mode")
+                    .accessibilityLabel("Mode")
+                    .accessibilityValue(draft.mode.label)
+                    Menu {
+                        Picker("Quality", selection: Binding(
+                            get: { draft.quality },
+                            set: { draft.selectQuality($0) }
+                        )) {
+                            if !profiles.contains(where: { $0.id == "auto" }) { Text("Auto").tag("auto") }
+                            ForEach(profiles) { profile in
+                                Text(profile.label).tag(profile.id)
+                            }
+                        }
+                    } label: {
+                        streamingPreferenceLabel("Quality", value: selectedQualityLabel)
+                    }
+                    .accessibilityIdentifier("stream-quality")
+                    .accessibilityLabel("Quality")
+                    .accessibilityValue(selectedQualityLabel)
                     Button("Apply Streaming Changes") {
-                        app.player.applyStreamingChanges()
-                        dismiss()
+                        if app.player.applyStreamingChanges(draft, profiles: profiles) { dismiss() }
                     }
+                    .disabled(!draft.isValid(in: profiles))
                 }
                 if !item.audioTracks.isEmpty { audioSection }
-                if !item.captions.isEmpty { subtitleSection }
+                if !app.player.subtitleOptions.isEmpty { subtitleSection }
                 if !item.chapters.isEmpty { chapterSection }
             }
             .navigationTitle("Playback Options")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            }
         }
+        .background(OptionsKeyboardDismissal(onDismiss: dismiss.callAsFunction).frame(width: 0, height: 0))
+    }
+
+    private var selectedQualityLabel: String {
+        profiles.first(where: { $0.id == draft.quality })?.label ?? "Auto"
+    }
+
+    private func streamingPreferenceLabel(_ title: String, value: String) -> some View {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+            : AnyLayout(HStackLayout(spacing: 12))
+        return layout {
+            Text(title).foregroundStyle(Color.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(value).foregroundStyle(Color.secondary)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .multilineTextAlignment(.leading)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     private var audioSection: some View {
@@ -708,44 +1119,7 @@ private struct PlaybackOptionsView: View {
     }
 
     private var subtitleSection: some View {
-        Section("Subtitles") {
-            Button {
-                Task {
-                    await app.player.selectCaption(nil)
-                    dismiss()
-                }
-            } label: {
-                optionRow("Off", selected: app.player.selectedCaptionIndex == nil)
-            }
-            .foregroundStyle(.primary)
-            ForEach(item.captions) { caption in
-                Button {
-                    Task {
-                        await app.player.selectCaption(caption.index)
-                        if app.player.subtitleError == nil { dismiss() }
-                    }
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(caption.label)
-                            Text(caption.isPlayableOnDevice ? caption.sourceFormat.uppercased() : "Unavailable on this device")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if app.player.selectedCaptionIndex == caption.index {
-                            Image(systemName: "checkmark").foregroundStyle(Color("AccessibleAccent"))
-                        }
-                    }
-                }
-                .foregroundStyle(.primary)
-                .disabled(!caption.isPlayableOnDevice)
-                .accessibilityIdentifier("caption-track-\(caption.index)")
-            }
-            if let error = app.player.subtitleError {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(.red)
-            }
-        }
+        SubtitleOptionsSection(isOffline: false, dismissOnSelection: dismiss.callAsFunction)
     }
 
     private var chapterSection: some View {
@@ -755,16 +1129,8 @@ private struct PlaybackOptionsView: View {
                     app.player.seek(toGlobalTime: chapter.startSeconds)
                     dismiss()
                 } label: {
-                    HStack {
-                        Text(chapter.title)
-                        Spacer()
-                        Text(PlaybackTimeline.displayTime(chapter.startSeconds)).foregroundStyle(.secondary)
-                        if app.player.currentChapterIndex == chapter.index {
-                            Image(systemName: "speaker.wave.2.fill")
-                                .foregroundStyle(Color("AccessibleAccent"))
-                                .accessibilityLabel("Current chapter")
-                        }
-                    }
+                    PlaybackChapterLabel(title: chapter.title, start: chapter.startSeconds,
+                        isCurrent: app.player.currentChapterIndex == chapter.index)
                 }
                 .foregroundStyle(.primary)
             }
@@ -777,5 +1143,114 @@ private struct PlaybackOptionsView: View {
             Spacer()
             if selected { Image(systemName: "checkmark").foregroundStyle(Color("AccessibleAccent")) }
         }
+    }
+}
+
+private struct PlaybackChapterLabel: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    let title: String
+    let start: Double
+    let isCurrent: Bool
+
+    var body: some View {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+            : AnyLayout(HStackLayout())
+        layout {
+            Text(title).fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            metadata.font(dynamicTypeSize.isAccessibilitySize ? .caption : nil)
+        }
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+    }
+
+    private var metadata: some View {
+        HStack(spacing: 8) {
+            Text(PlaybackTimeline.displayTime(start)).foregroundStyle(.secondary)
+            if isCurrent {
+                Image(systemName: "speaker.wave.2.fill")
+                    .foregroundStyle(Color("AccessibleAccent"))
+                    .accessibilityLabel("Current chapter")
+            }
+        }
+    }
+}
+
+/// A sheet has a separate responder chain from the presenting SwiftUI player.
+/// Acquire it after presentation so Escape does not depend on a List row's focus.
+private struct OptionsKeyboardDismissal: UIViewControllerRepresentable {
+    let onDismiss: () -> Void
+
+    func makeUIViewController(context: Context) -> OptionsKeyboardController {
+        let controller = OptionsKeyboardController()
+        controller.onDismiss = onDismiss
+        return controller
+    }
+
+    func updateUIViewController(_ controller: OptionsKeyboardController, context: Context) {
+        controller.onDismiss = onDismiss
+    }
+
+    static func dismantleUIViewController(_ controller: OptionsKeyboardController, coordinator: Void) {
+        controller.releaseKeyboard()
+        controller.onDismiss = nil
+    }
+}
+
+private final class OptionsKeyboardController: UIViewController {
+    var onDismiss: (() -> Void)?
+    private var ownsKeyboard = false
+
+    override var canBecomeFirstResponder: Bool { true }
+
+    override var keyCommands: [UIKeyCommand]? {
+        let command = UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(closeOptions(_:)))
+        command.discoverabilityTitle = "Close Playback Options"
+        command.wantsPriorityOverSystemBehavior = true
+        return [command]
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(closeOptions(_:)) {
+            return ownsKeyboard && view.window != nil
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func target(forAction action: Selector, withSender sender: Any?) -> Any? {
+        if action == #selector(closeOptions(_:)) {
+            return ownsKeyboard && view.window != nil ? self : nil
+        }
+        return super.target(forAction: action, withSender: sender)
+    }
+
+    override func loadView() {
+        view = UIView()
+        view.backgroundColor = .clear
+        view.accessibilityElementsHidden = true
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        ownsKeyboard = true
+        becomeFirstResponder()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        releaseKeyboard()
+        super.viewWillDisappear(animated)
+    }
+
+    func releaseKeyboard() {
+        ownsKeyboard = false
+        resignFirstResponder()
+    }
+
+    @objc private func closeOptions(_ command: UIKeyCommand) {
+        guard ownsKeyboard, view.window != nil else { return }
+        releaseKeyboard()
+        onDismiss?()
     }
 }

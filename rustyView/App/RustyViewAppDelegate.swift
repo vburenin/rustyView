@@ -3,17 +3,22 @@ import UIKit
 @MainActor
 final class BackgroundSessionEvents {
     static let shared = BackgroundSessionEvents()
-    private var completionHandler: (() -> Void)?
+    private var handlers: [String: [() -> Void]] = [:]
+    private var reconnect: ((String) -> Void)?
 
-    func store(_ completionHandler: @escaping () -> Void) {
-        self.completionHandler?()
-        self.completionHandler = completionHandler
+    func register(reconnect: @escaping (String) -> Void) {
+        self.reconnect = reconnect
+        for identifier in handlers.keys { reconnect(identifier) }
     }
 
-    func finish() {
-        let handler = completionHandler
-        completionHandler = nil
-        handler?()
+    func store(identifier: String, _ completionHandler: @escaping () -> Void) {
+        handlers[identifier, default: []].append(completionHandler)
+        reconnect?(identifier)
+    }
+
+    func finish(identifier: String) {
+        let callbacks = handlers.removeValue(forKey: identifier) ?? []
+        for callback in callbacks { callback() }
     }
 }
 
@@ -24,7 +29,7 @@ final class RustyViewAppDelegate: NSObject, UIApplicationDelegate {
         completionHandler: @escaping () -> Void
     ) {
         Task { @MainActor in
-            BackgroundSessionEvents.shared.store(completionHandler)
+            BackgroundSessionEvents.shared.store(identifier: identifier, completionHandler)
         }
     }
 }

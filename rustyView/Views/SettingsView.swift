@@ -2,31 +2,82 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var app: AppModel
-    @State private var showingConnection = false
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showingDisconnect = false
 
     var body: some View {
         List {
-            Section("Server") {
-                LabeledContent("Address", value: app.settings.serverAddress)
-                LabeledContent("User", value: app.settings.username)
-                Button("Edit Connection") { showingConnection = true }
-                Button("Forget Connection", role: .destructive) { showingDisconnect = true }
+            Section {
+                connectionValue("Address", value: app.settings.serverAddress)
+                connectionValue("User", value: app.settings.username)
+                Button("Edit Connection") { app.showingConnection = true }
+                Button(role: .destructive) { showingDisconnect = true } label: {
+                    Text("Forget Connection")
+                        .foregroundStyle(colorScheme == .dark ? Color.red : Color(red: 0.72, green: 0.08, blue: 0.06))
+                }
+            } header: {
+                sectionTitle("Server")
             }
 
-            Section("Playback") {
-                LabeledContent("Streaming", value: "Automatic")
-                Text("rustyView plays supported originals directly and asks the server for a compatible stream when needed.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+            Section {
+                Menu {
+                    Picker("Quality", selection: Binding(
+                        get: { app.playbackPreferences.preferredQualityID },
+                        set: { app.playbackPreferences.preferredQualityID = $0 }
+                    )) {
+                        Text("Auto").tag("auto")
+                        ForEach(app.library.capabilities?.qualityProfiles.filter { $0.id != "auto" } ?? []) { profile in
+                            Text(profile.label).tag(profile.id)
+                        }
+                        if qualityResolution.notice != nil {
+                            Text("Saved quality")
+                                .tag(app.playbackPreferences.preferredQualityID)
+                        }
+                    }
+                } label: {
+                    preferenceLabel("Quality", value: qualityLabel)
+                }
+                .accessibilityIdentifier("preferred-quality")
+                .accessibilityLabel("Quality")
+                .accessibilityValue(qualityLabel)
+                if app.library.capabilities != nil, let notice = qualityResolution.notice {
+                    Text(notice).font(.footnote).foregroundStyle(Color.primary.opacity(0.75))
+                }
+                Menu {
+                    Picker("Audio language", selection: Binding(
+                        get: { app.playbackPreferences.preferredAudioLanguage },
+                        set: { app.playbackPreferences.preferredAudioLanguage = $0 }
+                    )) {
+                        Text("Default").tag(String?.none)
+                        ForEach(audioLanguages, id: \.self) { language in
+                            Text(Locale.current.localizedString(forLanguageCode: language) ?? language).tag(Optional(language))
+                        }
+                    }
+                } label: {
+                    preferenceLabel("Audio language", value: audioLanguageLabel)
+                }
+                .accessibilityIdentifier("preferred-audio-language")
+                .accessibilityLabel("Audio language")
+                .accessibilityValue(audioLanguageLabel)
+                Text("Applies to your next movie. Lower quality uses less data.")
+                    .font(.footnote).foregroundStyle(Color.primary.opacity(0.75))
+            } header: {
+                sectionTitle("Playback")
             }
 
-            Section("Offline Storage") {
-                LabeledContent("Movies", value: "\(app.downloads.completed.count)")
-                LabeledContent("Used", value: storageUsed)
-                Text("Offline files stay on this device and are excluded from iCloud Backup.")
+            Section {
+                LabeledContent("Saved copies") {
+                    Text("\(app.downloads.completed.count)").foregroundStyle(Color.primary.opacity(0.75))
+                }
+                LabeledContent("Storage used") {
+                    Text(storageUsed).foregroundStyle(Color.primary.opacity(0.75))
+                }
+                Text("Offline copies aren’t included in iCloud Backup.")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.primary.opacity(0.75))
+            } header: {
+                sectionTitle("Offline Storage")
             }
 
             Section {
@@ -48,8 +99,8 @@ struct SettingsView: View {
                         }
                     }
                 } label: {
-                    LabeledContent(
-                        "Movie Downloads",
+                    preferenceLabel(
+                        "Network",
                         value: app.settings.allowCellularDownloads ? "Wi-Fi & Cellular" : "Wi-Fi Only"
                     )
                 }
@@ -58,35 +109,99 @@ struct SettingsView: View {
                 .accessibilityValue(app.settings.allowCellularDownloads ? "Wi-Fi and Cellular" : "Wi-Fi Only")
                 .accessibilityHint("Choose whether movie downloads may use cellular data")
             } header: {
-                Text("Download Network")
+                sectionTitle("Downloads")
             } footer: {
-                Text(app.settings.allowCellularDownloads
-                    ? "Downloads may use Wi-Fi or cellular data."
-                    : "Downloads wait for Wi-Fi and resume automatically when it is available.")
+                if !app.settings.allowCellularDownloads {
+                    Text("Downloads resume when Wi-Fi is available.")
+                        .foregroundStyle(Color.primary.opacity(0.75))
+                }
             }
 
-            Section("About") {
-                LabeledContent("API", value: "rustyDLNA schema \(RustyDLNAClient.schemaVersion)")
-                LabeledContent("App", value: appVersion)
+            Section {
+                LabeledContent("App") {
+                    Text(appVersion).foregroundStyle(Color.primary.opacity(0.75))
+                }
+            } header: {
+                sectionTitle("About")
             }
         }
         .navigationTitle("Settings")
-        .sheet(isPresented: $showingConnection) {
-            ConnectionSetupView(canDismiss: true)
-        }
         .confirmationDialog("Forget this server?", isPresented: $showingDisconnect, titleVisibility: .visible) {
             Button("Forget Connection", role: .destructive) { app.disconnect() }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("The saved password is removed from Keychain. Existing offline downloads remain on this device.")
+            Text("Your saved password will be removed. Downloads stay on this device.")
+        }
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title).foregroundStyle(Color.primary.opacity(0.75))
+    }
+
+    private var qualityResolution: PlaybackQualityResolution {
+        app.playbackPreferences.quality(in: app.library.capabilities?.qualityProfiles ?? [])
+    }
+
+    private var qualityLabel: String {
+        if app.playbackPreferences.preferredQualityID == "auto" { return "Auto" }
+        return app.library.capabilities?.qualityProfiles.first {
+            $0.id == app.playbackPreferences.preferredQualityID
+        }?.label.components(separatedBy: " · ").first ?? "Saved quality"
+    }
+
+    private var audioLanguageLabel: String {
+        guard let language = app.playbackPreferences.preferredAudioLanguage else { return "Default" }
+        return Locale.current.localizedString(forLanguageCode: language) ?? language
+    }
+
+    @ViewBuilder
+    private func connectionValue(_ title: String, value: String) -> some View {
+        if value.isEmpty {
+            EmptyView()
+        } else {
+            settingsValueLabel(title, value: value)
+                .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func preferenceLabel(_ title: String, value: String) -> some View {
+        settingsValueLabel(title, value: value)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+    }
+
+    private func settingsValueLabel(_ title: String, value: String) -> some View {
+        let isAccessibility = dynamicTypeSize.isAccessibilitySize
+        // Preserve the text elements when Dynamic Type changes the layout.
+        let layout = isAccessibility
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 12))
+        return layout {
+            Text(title)
+                .foregroundStyle(Color.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
+            Text(value)
+                .foregroundStyle(Color.primary.opacity(0.75))
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: isAccessibility ? .leading : .trailing)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var audioLanguages: [String] {
+        var values = Set(["en", "es", "fr", "de", "it", "pt", "ja", "ko", "zh", "ru", "uk", "ar", "hi"])
+        if let saved = app.playbackPreferences.preferredAudioLanguage { values.insert(saved) }
+        return values.sorted {
+            (Locale.current.localizedString(forLanguageCode: $0) ?? $0)
+                .localizedStandardCompare(Locale.current.localizedString(forLanguageCode: $1) ?? $1) == .orderedAscending
         }
     }
 
     private var storageUsed: String {
-        let bytes = app.downloads.completed.reduce(Int64(0)) { partial, record in
-            partial.addingReportingOverflow(record.byteCount).overflow ? Int64.max : partial + record.byteCount
-        }
-        return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        ByteCountFormatter.string(fromByteCount: app.downloads.totalStoredBytes, countStyle: .file)
     }
 
     private var appVersion: String {

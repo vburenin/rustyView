@@ -586,6 +586,7 @@ final class LibraryFolderNavigationTests: XCTestCase {
         XCTAssertEqual(model.currentFolder, FolderReference(id: "0", title: "Media"))
         XCTAssertEqual(model.entries.first?.id, "folder-7")
         XCTAssertTrue(model.entries.first?.isFolder == true)
+        model.recordVisibleAnchor("folder-7")
 
         await model.openFolder("folder-7")
         XCTAssertEqual(model.currentFolder, FolderReference(id: "folder-7", title: "Invented Shelf"))
@@ -594,11 +595,12 @@ final class LibraryFolderNavigationTests: XCTestCase {
 
         await model.navigateUp()
         XCTAssertEqual(model.currentFolder?.id, "0")
+        XCTAssertEqual(model.entries.map(\.id), ["folder-7"])
+        XCTAssertEqual(model.visibleAnchor, "folder-7")
         let requestedFolders = requests.values
-        XCTAssertEqual(requestedFolders.count, 3)
+        XCTAssertEqual(requestedFolders.count, 2, "The cached parent restores its entries and anchor without another HTTP request")
         XCTAssertNil(requestedFolders[0])
         XCTAssertEqual(requestedFolders[1], "folder-7")
-        XCTAssertEqual(requestedFolders[2], "0")
     }
 
     private static let rootPage = Data(#"""
@@ -790,7 +792,7 @@ final class DownloadManifestStoreTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: temporaryRoot) }
         let incoming = temporaryRoot.appendingPathComponent("incoming.tmp")
         try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
-        let payload = Data((0..<4096).map { UInt8($0 % 251) })
+        let payload = try OfflineMediaFixture.validData()
         try payload.write(to: incoming)
         let store = DownloadManifestStore(rootDirectory: temporaryRoot.appendingPathComponent("offline"))
         let metadata = DownloadTaskMetadata(
@@ -811,16 +813,17 @@ final class DownloadManifestStoreTests: XCTestCase {
         let record = try store.install(temporaryURL: incoming, metadata: metadata)
         XCTAssertFalse(FileManager.default.fileExists(atPath: incoming.path), "install must consume the temporary file")
         XCTAssertEqual(try Data(contentsOf: store.localURL(for: record)), payload)
-        XCTAssertEqual(record.byteCount, 4096)
+        XCTAssertEqual(record.byteCount, Int64(payload.count))
+        XCTAssertTrue(record.isReadyToWatch)
         XCTAssertEqual(record.fileName, "offline-\(metadata.recordID.uuidString.lowercased()).mp4")
         XCTAssertEqual(record.qualityID, "full_hd")
         XCTAssertEqual(record.videoQualityDescription, "Compatible · 1080p · 8 Mbps")
         XCTAssertEqual(record.audioTrackIndex, 2)
-        XCTAssertEqual(record.audioSelectionDescription, "Commentary · AAC · Stereo · Track ID 2")
+        XCTAssertEqual(record.audioSelectionDescription, "Commentary · AAC · Stereo")
         XCTAssertEqual(try store.load().records, [record])
 
         let replacementInput = temporaryRoot.appendingPathComponent("replacement.tmp")
-        let replacementPayload = Data(repeating: 0xA7, count: 2048)
+        let replacementPayload = try OfflineMediaFixture.unsupportedData()
         try replacementPayload.write(to: replacementInput)
         let replacementMetadata = DownloadTaskMetadata(
             recordID: UUID(),
@@ -828,22 +831,24 @@ final class DownloadManifestStoreTests: XCTestCase {
             mediaID: metadata.mediaID,
             title: metadata.title,
             kind: .original,
-            fileExtension: "mkv",
+            fileExtension: "webm",
             durationSeconds: metadata.durationSeconds,
             resolution: metadata.resolution
         )
         let replacement = try store.install(temporaryURL: replacementInput, metadata: replacementMetadata)
-        XCTAssertFalse(
+        XCTAssertTrue(
             FileManager.default.fileExists(atPath: store.localURL(for: record).path),
-            "Replacing an offline rendition must delete the bytes belonging to the previous copy"
+            "An original and a compatible copy must remain independently stored"
         )
         XCTAssertEqual(try Data(contentsOf: store.localURL(for: replacement)), replacementPayload)
         XCTAssertEqual(replacement.videoQualityDescription, "Original · 3840x2160")
         XCTAssertEqual(replacement.audioSelectionDescription, "All original tracks")
-        XCTAssertEqual(try store.load().records, [replacement])
+        XCTAssertEqual(try store.load().records, [record, replacement])
 
         try store.delete(replacement)
         XCTAssertFalse(FileManager.default.fileExists(atPath: store.localURL(for: replacement).path))
+        XCTAssertEqual(try store.load().records, [record])
+        try store.delete(record)
         XCTAssertTrue(try store.load().records.isEmpty)
     }
 
@@ -958,23 +963,30 @@ final class DownloadManifestStoreTests: XCTestCase {
         try JSONEncoder().encode(manifest).write(to: offlineRoot.appendingPathComponent("manifest.json"))
 
         let store = DownloadManifestStore(rootDirectory: offlineRoot)
-        XCTAssertEqual(try store.loadValidated().records, [valid])
-        XCTAssertEqual(try store.load().records, [valid], "reconciliation must be persisted atomically")
-        XCTAssertFalse(
+        let reconciled = try store.loadValidated().records
+        XCTAssertEqual(Set(reconciled.map(\.id)), Set([valid.id, superseded.id, truncated.id]))
+        XCTAssertFalse(try XCTUnwrap(reconciled.first(where: { $0.id == truncated.id })).isReadyToWatch)
+        XCTAssertNotNil(try XCTUnwrap(reconciled.first(where: { $0.id == truncated.id })).packageIssue)
+        XCTAssertEqual(try store.load().records, reconciled, "reconciliation must be persisted atomically")
+        XCTAssertFalse(valid.isReadyToWatch, "Legacy positive bytes are stored, not verified playable")
+        XCTAssertTrue(
             FileManager.default.fileExists(atPath: offlineRoot.appendingPathComponent("42001-old.mp4").path),
-            "reconciliation must reclaim a superseded copy of the same movie"
+            "Legacy duplicates must not silently delete user files"
         )
-        XCTAssertFalse(FileManager.default.fileExists(atPath: offlineRoot.appendingPathComponent("42002-compatible.mp4").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: offlineRoot.appendingPathComponent("42002-compatible.mp4").path),
+                      "Damaged bytes remain inventoried for explicit recovery or removal")
         XCTAssertTrue(FileManager.default.fileExists(atPath: outside.path), "an unsafe manifest path must never escape the app-owned directory")
     }
 }
 
 @MainActor
 final class DownloadManagerRestorationTests: XCTestCase {
-    func testRestoringBackgroundTasksKeepsOnlyOneDownloadPerServerAndMovie() throws {
+    func testRestoringBackgroundTasksKeepsOnlyOneDownloadPerServerAndMovie() async throws {
         let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: temporaryRoot) }
-        let manager = DownloadManager(store: DownloadManifestStore(rootDirectory: temporaryRoot))
+        let manager = DownloadManager(store: DownloadManifestStore(rootDirectory: temporaryRoot),
+                                      sessionIdentifier: "core-restoration.\(UUID().uuidString)",
+                                      sessionConfiguration: .ephemeral)
         let session = URLSession(configuration: .ephemeral)
         defer { session.invalidateAndCancel() }
         let url = try XCTUnwrap(URL(string: "https://media.example.test/video.mp4"))
@@ -997,6 +1009,7 @@ final class DownloadManagerRestorationTests: XCTestCase {
 
         let retainedID = UUID()
         manager.restore(tasks: [try task(recordID: retainedID), try task(recordID: UUID())])
+        await manager.waitForPendingOperations()
 
         XCTAssertEqual(manager.active.count, 1)
         XCTAssertEqual(manager.active.first?.id, retainedID)
@@ -1005,10 +1018,12 @@ final class DownloadManagerRestorationTests: XCTestCase {
         XCTAssertEqual(manager.active.first?.phase, .queued)
     }
 
-    func testRestoringAScheduledRetryKeepsItsVisibleQueueState() throws {
+    func testRestoringAScheduledRetryKeepsItsVisibleQueueState() async throws {
         let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: temporaryRoot) }
-        let manager = DownloadManager(store: DownloadManifestStore(rootDirectory: temporaryRoot))
+        let manager = DownloadManager(store: DownloadManifestStore(rootDirectory: temporaryRoot),
+                                      sessionIdentifier: "core-restoration.\(UUID().uuidString)",
+                                      sessionConfiguration: .ephemeral)
         let session = URLSession(configuration: .ephemeral)
         defer { session.invalidateAndCancel() }
         let url = try XCTUnwrap(URL(string: "https://media.example.test/video.mp4"))
@@ -1030,6 +1045,7 @@ final class DownloadManagerRestorationTests: XCTestCase {
         task.taskDescription = String(data: try JSONEncoder().encode(metadata), encoding: .utf8)
 
         manager.restore(tasks: [task])
+        await manager.waitForPendingOperations()
 
         guard case .retrying(let attempt, let restoredDate, _) = manager.active.first?.phase else {
             return XCTFail("A persisted scheduled task must remain visibly queued for retry")
@@ -1409,14 +1425,20 @@ final class WebVTTParserTests: XCTestCase {
 
 @MainActor
 final class AppModelObservationTests: XCTestCase {
-    func testNestedLibraryChangesInvalidateRootModel() {
+    func testNestedLibraryChangesInvalidateRootModel() async {
         let model = AppModel()
+        await model.userLibrary.waitUntilRestored()
+        await model.movieCache.waitUntilRestored()
+        await model.downloads.waitUntilRestored()
+        let settled = expectation(description: "Restoration publications have reached the main queue")
+        DispatchQueue.main.async { settled.fulfill() }
+        await fulfillment(of: [settled], timeout: 1)
         let changed = expectation(description: "Root model forwards child state changes")
-        let cancellable = model.objectWillChange.sink { changed.fulfill() }
+        let cancellable = model.objectWillChange.prefix(1).sink { changed.fulfill() }
 
         model.library.query = "invented query"
 
-        wait(for: [changed], timeout: 1)
+        await fulfillment(of: [changed], timeout: 1)
         XCTAssertEqual(model.library.query, "invented query")
         withExtendedLifetime(cancellable) {}
     }

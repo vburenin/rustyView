@@ -22,7 +22,7 @@ enum ServerAuthenticationPolicy {
         return URLCredential(
             user: connection.username,
             password: connection.password,
-            persistence: .forSession
+            persistence: .none
         )
     }
 }
@@ -74,20 +74,23 @@ struct LibraryRequest: Equatable, Sendable {
 }
 
 final class AuthenticatedSessionDelegate: NSObject, URLSessionTaskDelegate {
+    private let connection: ServerConnection
     private let lock = NSLock()
-    private var currentConnection: ServerConnection?
+    private var failure: RustyDLNAError?
 
-    func update(connection: ServerConnection?) {
+    var rejection: RustyDLNAError? {
         lock.lock()
-        currentConnection = connection
+        defer { lock.unlock() }
+        return failure
+    }
+
+    private func reject(_ error: RustyDLNAError) {
+        lock.lock()
+        failure = error
         lock.unlock()
     }
 
-    private func connection() -> ServerConnection? {
-        lock.lock()
-        defer { lock.unlock() }
-        return currentConnection
-    }
+    init(connection: ServerConnection) { self.connection = connection }
 
     func urlSession(
         _ session: URLSession,
@@ -95,18 +98,24 @@ final class AuthenticatedSessionDelegate: NSObject, URLSessionTaskDelegate {
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        guard let connection = connection() else {
-            completionHandler(.performDefaultHandling, nil)
+        let space = challenge.protectionSpace
+        let isTrust = space.authenticationMethod == NSURLAuthenticationMethodServerTrust
+        guard connection.origin.matches(scheme: space.protocol ?? (isTrust ? "https" : nil),
+                                        host: space.host, port: space.port) else {
+            reject(.untrustedURL)
+            completionHandler(.cancelAuthenticationChallenge, nil)
             return
         }
-        guard let credential = ServerAuthenticationPolicy.credential(
-            for: challenge,
-            connection: connection
-        ) else {
+        if let credential = ServerAuthenticationPolicy.credential(for: challenge, connection: connection) {
+            completionHandler(.useCredential, credential)
+        } else if space.authenticationMethod == NSURLAuthenticationMethodHTTPBasic
+                    || space.authenticationMethod == NSURLAuthenticationMethodHTTPDigest {
+            reject(.authenticationFailed)
+            completionHandler(.cancelAuthenticationChallenge, nil)
+        } else {
+            // Preserve normal certificate validation for the owned HTTPS origin.
             completionHandler(.performDefaultHandling, nil)
-            return
         }
-        completionHandler(.useCredential, credential)
     }
 
     func urlSession(
@@ -116,9 +125,9 @@ final class AuthenticatedSessionDelegate: NSObject, URLSessionTaskDelegate {
         newRequest request: URLRequest,
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
-        guard let connection = connection(),
-              let url = request.url,
+        guard let url = request.url,
               connection.origin.matches(url) else {
+            reject(.untrustedURL)
             completionHandler(nil)
             return
         }
@@ -126,64 +135,43 @@ final class AuthenticatedSessionDelegate: NSObject, URLSessionTaskDelegate {
     }
 }
 
-final class AuthenticatedAssetResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
-    private let connection: ServerConnection
-
-    init(connection: ServerConnection) {
-        self.connection = connection
-    }
-
-    func resourceLoader(
-        _ resourceLoader: AVAssetResourceLoader,
-        shouldWaitForResponseTo authenticationChallenge: URLAuthenticationChallenge
-    ) -> Bool {
-        guard let credential = ServerAuthenticationPolicy.credential(
-            for: authenticationChallenge,
-            connection: connection
-        ) else {
-            return false
-        }
-        authenticationChallenge.sender?.use(credential, for: authenticationChallenge)
-        return true
-    }
-}
-
-final class AuthenticatedMediaAsset {
-    let asset: AVURLAsset
-    private let resourceLoaderDelegate: AuthenticatedAssetResourceLoaderDelegate
-
-    init(url: URL, connection: ServerConnection) {
-        asset = AVURLAsset(url: url)
-        resourceLoaderDelegate = AuthenticatedAssetResourceLoaderDelegate(connection: connection)
-        asset.resourceLoader.setDelegate(
-            resourceLoaderDelegate,
-            queue: DispatchQueue(label: "com.example.rustyView.asset-authentication")
-        )
-    }
-}
-
 final class RustyDLNAClient {
     static let schemaVersion = 2
 
-    private let delegate: AuthenticatedSessionDelegate
     private let session: URLSession
-    private(set) var connection: ServerConnection?
+    private let connectionLock = NSLock()
+    private var currentConnection: ServerConnection?
+    var connection: ServerConnection? {
+        connectionLock.lock()
+        defer { connectionLock.unlock() }
+        return currentConnection
+    }
 
     init(configuration: URLSessionConfiguration = .default) {
         configuration.timeoutIntervalForRequest = 30
         configuration.timeoutIntervalForResource = 300
         configuration.requestCachePolicy = .reloadRevalidatingCacheData
-        delegate = AuthenticatedSessionDelegate()
-        session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+        configuration.urlCredentialStorage = nil
+        session = URLSession(configuration: configuration)
     }
 
     func configure(_ connection: ServerConnection?) {
-        self.connection = connection
-        delegate.update(connection: connection)
+        connectionLock.lock()
+        currentConnection = connection
+        connectionLock.unlock()
     }
 
     func connectionProbe() -> RustyDLNAClient {
         RustyDLNAClient(configuration: session.configuration)
+    }
+
+    /// Capture credentials and transport configuration before asynchronous work
+    /// starts. Later connection edits must not retarget an existing viewer.
+    func ownedConnection() throws -> RustyDLNAClient {
+        guard let connection else { throw RustyDLNAError.notConfigured }
+        let owned = connectionProbe()
+        owned.configure(connection)
+        return owned
     }
 
     func library(_ request: LibraryRequest) async throws -> LibraryPage {
@@ -229,14 +217,62 @@ final class RustyDLNAClient {
     }
 
     func data(for request: URLRequest) async throws -> Data {
-        let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data)
+        let owner = try owner(for: request)
+        return try await data(for: request, owner: owner)
+    }
+
+    /// A queued caller captures its account before waiting for admission. Reuse
+    /// this client's session while keeping that request's authentication fixed.
+    func data(for request: URLRequest, owner: ServerConnection) async throws -> Data {
+        guard let url = request.url, owner.origin.matches(url) else { throw RustyDLNAError.untrustedURL }
+        if let authorization = request.value(forHTTPHeaderField: "Authorization"),
+           authorization != owner.authorizationHeader() {
+            throw URLError(.cancelled)
+        }
+        let delegate = AuthenticatedSessionDelegate(connection: owner)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request, delegate: delegate)
+        } catch {
+            throw delegate.rejection ?? error
+        }
+        if let rejection = delegate.rejection { throw rejection }
+        try validate(response: response, data: data, owner: owner)
         return data
     }
 
     func resolvedURL(serverPath: String) throws -> URL {
         guard let connection else { throw RustyDLNAError.notConfigured }
         return try connection.resolve(serverPath: serverPath)
+    }
+
+    /// Inspect the same completed rendition without opening another media body.
+    /// Growing output deliberately has no final length; missing/encoded/error
+    /// responses cannot supply a transfer total.
+    func completedDownloadByteCount(serverPath: String) async throws -> Int64? {
+        var request = try authorizedRequest(serverPath: serverPath)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = 10
+        request.setValue("video/mp4, application/octet-stream", forHTTPHeaderField: "Accept")
+        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        let owner = try owner(for: request)
+        let delegate = AuthenticatedSessionDelegate(connection: owner)
+        let data: Data
+        let response: URLResponse
+        do { (data, response) = try await session.data(for: request, delegate: delegate) }
+        catch { throw delegate.rejection ?? error }
+        if let rejection = delegate.rejection { throw rejection }
+        try validate(response: response, data: data, owner: owner)
+        guard let response = response as? HTTPURLResponse, response.statusCode == 200,
+              response.url == request.url,
+              ["video/mp4", "application/mp4", "application/octet-stream"].contains(response.mimeType?.lowercased() ?? ""),
+              response.value(forHTTPHeaderField: "Transfer-Encoding") == nil,
+              response.value(forHTTPHeaderField: "Content-Encoding").map({ $0.lowercased() == "identity" }) != false,
+              let value = response.value(forHTTPHeaderField: "Content-Length")?.trimmingCharacters(in: .whitespaces),
+              !value.isEmpty, value.allSatisfy({ $0.isASCII && $0.isNumber }),
+              let count = Int64(value), count > 0 else { return nil }
+        return count
     }
 
     func authorizedRequest(serverPath: String) throws -> URLRequest {
@@ -248,10 +284,10 @@ final class RustyDLNAClient {
         return request
     }
 
-    func asset(serverPath: String) throws -> AuthenticatedMediaAsset {
+    func asset(serverPath: String) async throws -> AuthenticatedMediaAsset {
         guard let connection else { throw RustyDLNAError.notConfigured }
         let url = try connection.resolve(serverPath: serverPath)
-        return AuthenticatedMediaAsset(url: url, connection: connection)
+        return try await AuthenticatedMediaAsset(url: url, connection: connection)
     }
 
     func compatiblePath(
@@ -260,13 +296,14 @@ final class RustyDLNAClient {
         quality: String = "auto",
         audioIndex: Int? = nil,
         startSeconds: Int = 0,
-        forceVideoTranscode: Bool = false
+        forceVideoTranscode: Bool = false,
+        preparedIdentity: PreparedPlaybackIdentity? = nil
     ) -> String {
         // A non-Auto quality is a resolution/bitrate constraint. Copying the
         // source cannot satisfy that constraint, so it must use a video encode.
-        let video = forceVideoTranscode || quality != "auto"
-            ? "transcode"
-            : PlaybackCompatibility.videoMode(for: item)
+        let output = CompatibleOutputPlan(item: item, quality: quality, audioIndex: audioIndex,
+                                          forceVideoTranscode: forceVideoTranscode)
+        let video = output.videoMode
         var components = URLComponents(string: item.fallbackURL) ?? URLComponents()
         if delivery == "hls" {
             components.path = components.path.replacingOccurrences(of: ".mp4", with: ".m3u8")
@@ -274,16 +311,16 @@ final class RustyDLNAClient {
         let requestID = UInt64.random(in: 1...UInt64.max)
         var queryItems = [
             URLQueryItem(name: "mode", value: "compatible"),
-            URLQueryItem(name: "audio", value: String(audioIndex ?? item.defaultAudioIndex)),
+            URLQueryItem(name: "audio", value: String(output.audioIndex)),
             URLQueryItem(name: "start", value: String(max(0, startSeconds))),
             URLQueryItem(name: "quality", value: quality),
             URLQueryItem(name: "video_mode", value: video),
             URLQueryItem(name: "audio_mode", value: "transcode"),
             URLQueryItem(name: "reason", value: "native_ios"),
-            URLQueryItem(name: "request", value: String(requestID)),
-            URLQueryItem(name: "session", value: String(requestID)),
+            URLQueryItem(name: "request", value: String(preparedIdentity?.generation ?? requestID)),
+            URLQueryItem(name: "session", value: String(preparedIdentity?.session ?? requestID)),
         ]
-        if video == "transcode" { queryItems.append(URLQueryItem(name: "video_output", value: "h264_sdr")) }
+        if let videoOutput = output.videoOutput { queryItems.append(URLQueryItem(name: "video_output", value: videoOutput)) }
         if delivery != "mp4" { queryItems.append(URLQueryItem(name: "delivery", value: delivery)) }
         components.queryItems = queryItems
         return components.string ?? item.fallbackURL
@@ -295,8 +332,7 @@ final class RustyDLNAClient {
     }
 
     private func decoded<T: Decodable>(request: URLRequest) async throws -> T {
-        let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data)
+        let data = try await data(for: request)
         let version = try JSONDecoder().decode(SchemaEnvelope.self, from: data).schemaVersion
         if version != Self.schemaVersion {
             throw RustyDLNAError.schemaMismatch(version)
@@ -329,7 +365,20 @@ final class RustyDLNAClient {
         return try await decoded(request: request)
     }
 
-    private func validate(response: URLResponse, data: Data) throws {
+    private func owner(for request: URLRequest) throws -> ServerConnection {
+        guard let connection else { throw RustyDLNAError.notConfigured }
+        guard let url = request.url, connection.origin.matches(url) else { throw RustyDLNAError.untrustedURL }
+        // Artwork can wait for a request slot while the account changes. Never
+        // attach that old request to the new account's authentication delegate.
+        if let authorization = request.value(forHTTPHeaderField: "Authorization"),
+           authorization != connection.authorizationHeader() {
+            throw URLError(.cancelled)
+        }
+        return connection
+    }
+
+    private func validate(response: URLResponse, data: Data, owner: ServerConnection) throws {
+        guard let url = response.url, owner.origin.matches(url) else { throw RustyDLNAError.untrustedURL }
         guard let http = response as? HTTPURLResponse else { throw RustyDLNAError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
             if http.statusCode == 401 { throw RustyDLNAError.authenticationFailed }
