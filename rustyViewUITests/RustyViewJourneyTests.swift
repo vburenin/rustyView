@@ -1476,8 +1476,20 @@ final class RustyViewJourneyTests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(server.preparedRequests.last?.generation), previousGeneration,
                              "The visible Retry must start a fresh owned request and decode real media")
         XCTAssertFalse(app.staticTexts["Playback couldn't continue"].exists)
+        if !category.isAccessibilityCategory {
+            // Two seconds of decoded playback leaves the original controls
+            // near their three-second deadline. Reveal a fresh control window
+            // before interacting, instead of racing the intentional auto-hide.
+            XCTAssertTrue(app.buttons["play-pause-control"].waitForNonExistence(timeout: 4))
+        }
         showPlayerControls(in: app)
-        app.buttons["play-pause-control"].tap()
+        let pause = app.buttons["play-pause-control"]
+        XCTAssertTrue(pause.isHittable)
+        // Tap the visible overlay directly. XCTest's automatic scroll-to-visible
+        // gesture can dismiss the player sheet while its controls auto-hide.
+        pause.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(pause.waitForExistence(timeout: 2))
+        XCTAssertEqual(pause.label, "Play", "The recovered movie must respond to Pause")
         let close = app.buttons["Close player"]
         AuditReveal(close, in: app)
         AuditAssertTarget(close, in: app)
@@ -2908,13 +2920,28 @@ final class RustyViewJourneyTests: XCTestCase {
         // must not increase the number of identical text pixels required to
         // resolve ink; still require a repeated mode, not isolated noise.
         let minimumInkSupport = max(20, inkPixelCount / 20)
-        guard let foreground = inkCandidates.first(where: { $0.value >= minimumInkSupport }) else { return false }
-        let ink = luminance(foreground.key)
-        let contrast = backgroundShades.map { shade in
-            let base = luminance(shade.key)
-            return (max(base, ink) + 0.05) / (min(base, ink) + 0.05)
+        // The same native scroll-edge shading also varies solid text pixels.
+        // Count a small color neighborhood, keeping the support threshold and
+        // testing its lowest contrast instead of selecting one favorable pixel.
+        func inkShades(around color: Int) -> [(key: Int, value: Int)] {
+            inkCandidates.filter { shade in
+                [16, 8, 0].allSatisfy { shift in
+                    abs(((shade.key >> shift) & 255) - ((color >> shift) & 255)) <= 8
+                }
+            }
+        }
+        guard let foreground = inkCandidates.first(where: {
+            inkShades(around: $0.key).reduce(0) { $0 + $1.value } >= minimumInkSupport
+        }) else { return false }
+        let foregroundShades = inkShades(around: foreground.key)
+        let contrast = foregroundShades.flatMap { foregroundShade in
+            let ink = luminance(foregroundShade.key)
+            return backgroundShades.map { shade in
+                let base = luminance(shade.key)
+                return (max(base, ink) + 0.05) / (min(base, ink) + 0.05)
+            }
         }.min() ?? 0
-        let evidence = XCTAttachment(string: "Label \(label.identifier.isEmpty ? label.label : label.identifier): sRGB foreground \(foreground.key), background \(background.key), background shades \(backgroundShades.count), ink pixels \(inkPixelCount), mode support \(foreground.value), minimum contrast \(contrast):1")
+        let evidence = XCTAttachment(string: "Label \(label.identifier.isEmpty ? label.label : label.identifier): sRGB foreground \(foreground.key), background \(background.key), background shades \(backgroundShades.count), ink pixels \(inkPixelCount), neighborhood support \(foregroundShades.reduce(0) { $0 + $1.value }), minimum contrast \(contrast):1")
         evidence.name = "Measured plain-label contrast"
         evidence.lifetime = .keepAlways
         add(evidence)

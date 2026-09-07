@@ -121,6 +121,13 @@ struct SettingsView: View {
                 LabeledContent("App") {
                     Text(appVersion).foregroundStyle(Color.primary.opacity(0.75))
                 }
+                Link(destination: URL(string: "https://rustyview-support.vburenin.chatgpt.site/privacy")!) {
+                    Text("Privacy Policy")
+                        .foregroundStyle(Color.primary)
+                        .underline()
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
             } header: {
                 sectionTitle("About")
             }

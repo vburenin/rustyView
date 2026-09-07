@@ -19,6 +19,9 @@ targets:
       path: rustyView/Info.plist
       properties:
         CFBundleDisplayName: rustyView
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
           UISceneConfigurations: {}
@@ -42,6 +45,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(RUSTYVIEW_BUNDLE_ID)
         PRODUCT_NAME: rustyView
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO

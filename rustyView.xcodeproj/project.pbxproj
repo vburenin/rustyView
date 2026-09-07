@@ -15,6 +15,7 @@
 		09F3B3256CC7F4130594612A /* UserLibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B34F34CBC2E380E84E23FAFD /* UserLibraryStore.swift */; };
 		0BF756328A21301EB44F1AC0 /* RequestOwnershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EED056194640338DB1257F39 /* RequestOwnershipTests.swift */; };
 		0C8A0038E08F603CA77EA6EB /* DownloadMovieGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 686C1BD721CD3C293A4BC2DC /* DownloadMovieGroup.swift */; };
+		0CBD1067878CF047A58DB587 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 1615C20225D2E02344370F3B /* PrivacyInfo.xcprivacy */; };
 		0D5D9D6DA3C0FEDFF7BB9294 /* DownloadQueueStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF235AC1DEEC0CED4189DC10 /* DownloadQueueStore.swift */; };
 		0FD4AABD8ED2BF7CDF2622D9 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 5E78D74AEE0ED34DF7CC5510 /* README.md */; };
 		1042A8BA4769D82E16A44A94 /* DownloadProgressPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B25E5D58BF434BCC47CAC928 /* DownloadProgressPresentation.swift */; };
@@ -138,6 +139,7 @@
 		10EB05BC4EB461E7A302F043 /* PlaybackActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackActivity.swift; sourceTree = "<group>"; };
 		1185298C52CE3D4254F30024 /* StorageRecoveryFontTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageRecoveryFontTests.swift; sourceTree = "<group>"; };
 		11ABBE511B276ABCA89A7298 /* DownloadOutputContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadOutputContractTests.swift; sourceTree = "<group>"; };
+		1615C20225D2E02344370F3B /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		1A2ABAB5E97BB08B9378244D /* PlaybackPreferencesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackPreferencesTests.swift; sourceTree = "<group>"; };
 		1A5BAD550A62F9C1F8AF324D /* PlaybackPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackPreferences.swift; sourceTree = "<group>"; };
 		1A63BBEC429ED15C576D8A42 /* AVFoundationOriginTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AVFoundationOriginTests.swift; sourceTree = "<group>"; };
@@ -156,7 +158,7 @@
 		36F4F614FB2749E5E52C079E /* CaptionPlaybackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionPlaybackTests.swift; sourceTree = "<group>"; };
 		37FAA6C38FD3A72D5C4E253E /* ArtworkPipelinePerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtworkPipelinePerformanceTests.swift; sourceTree = "<group>"; };
 		3AF133E841629AA2FF83BBC3 /* DownloadResource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadResource.swift; sourceTree = "<group>"; };
-		3DC01DB4DD9A1FBF4BEA91C0 /* synthetic-stall-0.ts */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.typescript; path = "synthetic-stall-0.ts"; sourceTree = "<group>"; };
+		3DC01DB4DD9A1FBF4BEA91C0 /* synthetic-stall-0.ts */ = {isa = PBXFileReference; path = "synthetic-stall-0.ts"; sourceTree = "<group>"; };
 		421A1B23CF697FE13AA8F450 /* DownloadModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadModels.swift; sourceTree = "<group>"; };
 		43CBCD835A2EFC74409EBA9A /* DownloadBatchPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadBatchPerformanceTests.swift; sourceTree = "<group>"; };
 		4497D0F6A769C0CDD83F0AC7 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -166,17 +168,17 @@
 		4C3194A6ED6A5E5A5D69C9CD /* PlaybackTrustTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackTrustTests.swift; sourceTree = "<group>"; };
 		4F632CA80A3F61FF01721AD0 /* MediaRelayRobustnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaRelayRobustnessTests.swift; sourceTree = "<group>"; };
 		5446B2C5B95361E59054E55B /* MediaRelayProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaRelayProtocol.swift; sourceTree = "<group>"; };
-		56149A2919D74A98161D2B77 /* synthetic-native-tracks.mp4 */ = {isa = PBXFileReference; lastKnownFileType = file; path = "synthetic-native-tracks.mp4"; sourceTree = "<group>"; };
+		56149A2919D74A98161D2B77 /* synthetic-native-tracks.mp4 */ = {isa = PBXFileReference; path = "synthetic-native-tracks.mp4"; sourceTree = "<group>"; };
 		5B38F2F219CDF5596D6907CE /* RustyViewJourneyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustyViewJourneyTests.swift; sourceTree = "<group>"; };
 		5DF80727CBFD68B8E3FED76A /* DownloadsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadsView.swift; sourceTree = "<group>"; };
 		5E78D74AEE0ED34DF7CC5510 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		5FAA749D18284B2297B59829 /* PlaybackSystemController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackSystemController.swift; sourceTree = "<group>"; };
-		60749125CD163E50479EF9D6 /* synthetic-playback.mp4 */ = {isa = PBXFileReference; lastKnownFileType = file; path = "synthetic-playback.mp4"; sourceTree = "<group>"; };
-		615A67A74AAC9CB7477AD2DE /* synthetic-stall-2.ts */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.typescript; path = "synthetic-stall-2.ts"; sourceTree = "<group>"; };
+		60749125CD163E50479EF9D6 /* synthetic-playback.mp4 */ = {isa = PBXFileReference; path = "synthetic-playback.mp4"; sourceTree = "<group>"; };
+		615A67A74AAC9CB7477AD2DE /* synthetic-stall-2.ts */ = {isa = PBXFileReference; path = "synthetic-stall-2.ts"; sourceTree = "<group>"; };
 		6194C9EAA20B223412262DE8 /* DownloadCancellationOwnershipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadCancellationOwnershipTests.swift; sourceTree = "<group>"; };
 		66F71A08D81EF3FC19940CFA /* DownloadSchedulingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadSchedulingTests.swift; sourceTree = "<group>"; };
 		686C1BD721CD3C293A4BC2DC /* DownloadMovieGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadMovieGroup.swift; sourceTree = "<group>"; };
-		68EB8E7749DFC8A254C54544 /* rustyView.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = rustyView.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		68EB8E7749DFC8A254C54544 /* rustyView.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = rustyView.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6B3AC466004F314D71CBBF12 /* BrowseRestorationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowseRestorationTests.swift; sourceTree = "<group>"; };
 		6CEFC195C24BA8DD8FB54ABD /* ServerModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerModels.swift; sourceTree = "<group>"; };
 		6E191B3BE6B3DCE129DD6D70 /* ConnectionRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionRecoveryTests.swift; sourceTree = "<group>"; };
@@ -197,12 +199,12 @@
 		943B099FF00E476ACB7F3F17 /* DownloadStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadStateStore.swift; sourceTree = "<group>"; };
 		94E6093D85A7B2C70343B40B /* ReviewRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewRegressionTests.swift; sourceTree = "<group>"; };
 		961A3F270781E5AAC664E0BC /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
-		96E54C4F634481DB658AB7B8 /* rustyViewTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rustyViewTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		98023D925D5DE783BAB9419F /* synthetic-offline-unsupported.webm */ = {isa = PBXFileReference; lastKnownFileType = file; path = "synthetic-offline-unsupported.webm"; sourceTree = "<group>"; };
+		96E54C4F634481DB658AB7B8 /* rustyViewTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = rustyViewTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		98023D925D5DE783BAB9419F /* synthetic-offline-unsupported.webm */ = {isa = PBXFileReference; path = "synthetic-offline-unsupported.webm"; sourceTree = "<group>"; };
 		A37961EA0731E9B17724E589 /* MovieDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieDetailView.swift; sourceTree = "<group>"; };
 		A4A0F24F81230A96490CF258 /* DownloadManifestStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManifestStore.swift; sourceTree = "<group>"; };
 		A52B17155864365A889D23D8 /* MovieMetadataCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieMetadataCache.swift; sourceTree = "<group>"; };
-		A7F6F33F6863E7D9F2CE46BE /* synthetic-playback.ts */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.typescript; path = "synthetic-playback.ts"; sourceTree = "<group>"; };
+		A7F6F33F6863E7D9F2CE46BE /* synthetic-playback.ts */ = {isa = PBXFileReference; path = "synthetic-playback.ts"; sourceTree = "<group>"; };
 		A89E7346E864F02AB59C1CDF /* SavedCollectionIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedCollectionIntegrationTests.swift; sourceTree = "<group>"; };
 		AB5A0695389F5C695A2232E8 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		ACF820F43747D241AA9F3966 /* PlaybackTransportState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackTransportState.swift; sourceTree = "<group>"; };
@@ -212,7 +214,7 @@
 		B37B5738EE2D251F5BBA8E58 /* DownloadMovieGroupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadMovieGroupTests.swift; sourceTree = "<group>"; };
 		B4BA5339895D22596DBB214E /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		B59E1EA1503B8ACFFB669319 /* DownloadManagerRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManagerRuntime.swift; sourceTree = "<group>"; };
-		BB1B4831EA7A6860586F90BC /* synthetic-offline-valid.mp4 */ = {isa = PBXFileReference; lastKnownFileType = file; path = "synthetic-offline-valid.mp4"; sourceTree = "<group>"; };
+		BB1B4831EA7A6860586F90BC /* synthetic-offline-valid.mp4 */ = {isa = PBXFileReference; path = "synthetic-offline-valid.mp4"; sourceTree = "<group>"; };
 		BC4F080FA0164F2BC25A3DD0 /* RustyViewAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustyViewAppDelegate.swift; sourceTree = "<group>"; };
 		C15A2365123D8207B7EFBC02 /* PlaybackActivityIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackActivityIntegrationTests.swift; sourceTree = "<group>"; };
 		C5F9A0C43CD934DB4D757367 /* MovieMetadata.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieMetadata.swift; sourceTree = "<group>"; };
@@ -227,18 +229,18 @@
 		D9515F38F67DE220807183DA /* LibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryModel.swift; sourceTree = "<group>"; };
 		E51F48EF920BE1CB60F50D92 /* UserLibraryStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserLibraryStoreTests.swift; sourceTree = "<group>"; };
 		E8C7CE24DAF73F292636E9B3 /* DownloadResumeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadResumeTests.swift; sourceTree = "<group>"; };
-		E99B14361C72FA3C72FCB82D /* synthetic-multiaudio.mp4 */ = {isa = PBXFileReference; lastKnownFileType = file; path = "synthetic-multiaudio.mp4"; sourceTree = "<group>"; };
-		ECCB3B58CB03911B0CA9F098 /* synthetic-native-caption.mp4 */ = {isa = PBXFileReference; lastKnownFileType = file; path = "synthetic-native-caption.mp4"; sourceTree = "<group>"; };
+		E99B14361C72FA3C72FCB82D /* synthetic-multiaudio.mp4 */ = {isa = PBXFileReference; path = "synthetic-multiaudio.mp4"; sourceTree = "<group>"; };
+		ECCB3B58CB03911B0CA9F098 /* synthetic-native-caption.mp4 */ = {isa = PBXFileReference; path = "synthetic-native-caption.mp4"; sourceTree = "<group>"; };
 		ED84385A3F51C1958552BF95 /* PlaybackRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackRequest.swift; sourceTree = "<group>"; };
 		EED056194640338DB1257F39 /* RequestOwnershipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestOwnershipTests.swift; sourceTree = "<group>"; };
 		EF77D6A09369FB106942646D /* DownloadSessionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadSessionPolicy.swift; sourceTree = "<group>"; };
 		EFBDF39ADF5255FAB97DEC23 /* PlaybackSystemTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackSystemTests.swift; sourceTree = "<group>"; };
 		F2E3572EA52757C12835E565 /* PlaybackModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackModel.swift; sourceTree = "<group>"; };
-		F39B53EE0A8AD5AC6B700C58 /* rustyViewUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = rustyViewUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F39B53EE0A8AD5AC6B700C58 /* rustyViewUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = rustyViewUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F471FBA6C404797D50ACD9BD /* RustyViewCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustyViewCoreTests.swift; sourceTree = "<group>"; };
 		F8275F4661FBAB081175A711 /* RustyDLNAClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustyDLNAClient.swift; sourceTree = "<group>"; };
 		FAF6F62D03BED19A4909EE3C /* LibraryIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryIdentityTests.swift; sourceTree = "<group>"; };
-		FECBE9F2044B9AF2958264D1 /* synthetic-stall-1.ts */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.typescript; path = "synthetic-stall-1.ts"; sourceTree = "<group>"; };
+		FECBE9F2044B9AF2958264D1 /* synthetic-stall-1.ts */ = {isa = PBXFileReference; path = "synthetic-stall-1.ts"; sourceTree = "<group>"; };
 		FF235AC1DEEC0CED4189DC10 /* DownloadQueueStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadQueueStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -458,6 +460,7 @@
 			children = (
 				8B60547FB0DE51A5E33CD3B5 /* Assets.xcassets */,
 				91D0EE6C6AF885B8FFDEBA46 /* Info.plist */,
+				1615C20225D2E02344370F3B /* PrivacyInfo.xcprivacy */,
 				C6779520AC4A557E295C5AF4 /* RustyViewApp.swift */,
 				5EFE783B931EF9FE1AECF0A8 /* App */,
 				5CBF41FB39E0406EB76B4970 /* Downloads */,
@@ -548,6 +551,7 @@
 						TestTargetID = EC68F8D8F872E65F1F7993DA;
 					};
 					EC68F8D8F872E65F1F7993DA = {
+						DevelopmentTeam = "$(RUSTYVIEW_DEVELOPMENT_TEAM)";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -579,6 +583,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				90D356C590AF968FE19E32D2 /* Assets.xcassets in Resources */,
+				0CBD1067878CF047A58DB587 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -781,12 +786,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = 96MN4JL3NP;
+				CURRENT_PROJECT_VERSION = 2;
 				INFOPLIST_FILE = rustyView/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(RUSTYVIEW_BUNDLE_ID)";
 				PRODUCT_NAME = rustyView;
 				SDKROOT = iphoneos;
@@ -964,12 +970,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = 96MN4JL3NP;
+				CURRENT_PROJECT_VERSION = 2;
 				INFOPLIST_FILE = rustyView/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(RUSTYVIEW_BUNDLE_ID)";
 				PRODUCT_NAME = rustyView;
 				SDKROOT = iphoneos;

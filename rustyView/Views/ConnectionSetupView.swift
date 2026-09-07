@@ -120,6 +120,15 @@ struct ConnectionSetupView: View {
                             .frame(minHeight: 44)
                             .accessibilityIdentifier("connection-cancel-attempt")
                     }
+
+                    Link(destination: URL(string: "https://rustyview-support.vburenin.chatgpt.site/privacy")!) {
+                        Text("Privacy Policy")
+                            .font(.footnote)
+                            .foregroundStyle(Color.primary)
+                            .underline()
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
                 }
                 .padding(24)
                 .frame(maxWidth: 560)

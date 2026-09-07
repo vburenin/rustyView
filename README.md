@@ -1,9 +1,9 @@
 # rustyView
 
-Your movie library. At home or on the go.
+The iPhone and iPad companion app for rustyDLNA.
 
-rustyView brings your [rustyDLNA](https://github.com/vburenin/rustyDLNA) video
-library to iPhone and iPad. Browse your collection, pick up where you left off,
+rustyView connects to your [rustyDLNA](https://github.com/vburenin/rustyDLNA) video
+library. Browse your collection, pick up where you left off,
 and take movies with you for the flight, the commute, or anywhere without a
 connection.
 
@@ -196,6 +196,28 @@ Contributing? See [the contributor guide](AGENTS.md) for architecture, build
 and test commands, and privacy requirements. Enable the commit hook with
 `git config core.hooksPath .githooks`, and run `scripts/privacy_check.sh` before
 sharing changes. Keep local configuration and captures in ignored paths.
+
+## TestFlight builds
+
+TestFlight distribution requires an Apple Developer Program membership and an
+App Store Connect app record matching the bundle identifier in `Local.xcconfig`.
+Keep the signing team in that ignored file so regenerating the project preserves
+it without checking private deployment identity into source control.
+
+Set `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.yml`, incrementing
+the build number for each upload, then run `xcodegen generate`. Select the
+`rustyView` scheme and **Any iOS Device (arm64)** in Xcode, choose **Product →
+Archive**, and use Organizer's **Distribute App → App Store Connect** flow.
+After processing, add the build to a TestFlight group in App Store Connect.
+
+The app bundles `PrivacyInfo.xcprivacy` for app preferences, owned-file metadata,
+download space checks, and playback timers. Its encryption declaration covers
+Apple-provided HTTPS, Keychain, and CryptoKit; review both declarations when adding
+new APIs, data collection, or dependencies. Before inviting external testers,
+provide Apple with a reachable demo server, synthetic media, and dedicated review
+credentials through the private TestFlight review information.
+
+See [Apple's TestFlight guide](https://developer.apple.com/help/app-store-connect/test-a-beta-version/testflight-overview/).
 
 ## License
 

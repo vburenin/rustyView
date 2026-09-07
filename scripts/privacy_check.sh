@@ -57,6 +57,10 @@ report_regex_matches() {
 
 is_allowed_public_host() {
     case "$1" in
+        rustyview-support.vburenin.chatgpt.site|rusty.firempq.com)
+            # Public App Store support/privacy pages, never a media server.
+            return 0
+            ;;
         example|*.example|example.com|*.example.com|example.test|*.example.test|invalid|*.invalid|localhost|127.0.0.1|www.apple.com|developer.apple.com|www.apache.org)
             return 0
             ;;
@@ -185,6 +189,11 @@ while IFS= read -r -d '' file; do
             line=${match%%:*}
             email=${match#*:}
             domain=${email##*@}
+            # The owner explicitly designated this public App Store contact.
+            if [[ "$email" == "vbhomeai@gmail.com" &&
+                  ( "$file" == "docs/APP_STORE.md" || "$file" == "scripts/privacy_check.sh" ) ]]; then
+                continue
+            fi
             case "$domain" in
                 example|*.example|example.com|*.example.com|example.test|*.example.test|invalid|*.invalid)
                     ;;
