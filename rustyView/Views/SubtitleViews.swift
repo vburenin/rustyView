@@ -54,6 +54,7 @@ struct SubtitleFeedbackView: View {
 struct SubtitleOptionsSection: View {
     @EnvironmentObject private var app: AppModel
     let isOffline: Bool
+    var dismissOnRequest = false
     let dismissOnSelection: () -> Void
 
     var body: some View {
@@ -71,9 +72,10 @@ struct SubtitleOptionsSection: View {
             .accessibilityIdentifier(isOffline ? "local-caption-off" : "caption-off")
             ForEach(app.player.subtitleOptions) { option in
                 Button {
+                    if dismissOnRequest { dismissOnSelection() }
                     Task {
                         await app.player.selectSubtitle(id: option.id)
-                        if app.player.subtitleSelection.active?.id == option.id { dismissOnSelection() }
+                        if !dismissOnRequest, app.player.subtitleSelection.active?.id == option.id { dismissOnSelection() }
                     }
                 } label: {
                     HStack {

@@ -228,7 +228,7 @@ struct AudioTrack: Codable, Identifiable, Hashable, Sendable {
     var id: Int { index }
 
     var displayName: String {
-        title ?? language?.uppercased() ?? "Track \(index + 1)"
+        AudioTrackName.display(title: title, language: language, fallback: "Track \(index + 1)")
     }
 
     var technicalLabel: String {

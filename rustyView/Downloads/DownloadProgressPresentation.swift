@@ -27,4 +27,11 @@ struct DownloadProgressPresentation {
         let total = ByteCountFormatter.string(fromByteCount: expected, countStyle: .file)
         return "\(bytes) of \(total)"
     }
+
+    var remainingByteText: String? {
+        guard case .downloading(_, let received, let expected) = phase,
+              let expected, expected > 0 else { return nil }
+        let remaining = ByteCountFormatter.string(fromByteCount: max(0, expected - max(0, received)), countStyle: .file)
+        return "\(remaining) remaining"
+    }
 }

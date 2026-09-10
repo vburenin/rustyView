@@ -9,6 +9,8 @@ struct PlayerScreen: View {
     @FocusState private var keyboardFocus: Bool
     @AccessibilityFocusState private var assistiveFocus: PlayerControl?
     @State private var showingDetails = false
+    @State private var showingChoice = false
+    @State private var showingSubtitles = false
     @State private var controlsVisible = true
     @State private var isScrubbing = false
     @State private var scrubberTime = 0.0
@@ -139,6 +141,11 @@ struct PlayerScreen: View {
             controlsVisible = true
             scheduleAutoHide()
         }
+        .onChange(of: selectionIsPresented) { _, showing in
+            keyboardFocus = !showing
+            controlsVisible = true
+            scheduleAutoHide()
+        }
         .onChange(of: app.player.requiresSubtitleOutputAcknowledgement) { _, _ in
             updatePictureInPicturePolicy()
         }
@@ -173,6 +180,13 @@ struct PlayerScreen: View {
                     .presentationDetents(dynamicTypeSize.isAccessibilitySize ? [.large] : [.medium, .large])
             }
         }
+        .sheet(isPresented: $showingSubtitles) {
+            SelectionSheet(title: "Subtitles", listIdentifier: "subtitle-choice-list") {
+                SubtitleOptionsSection(isOffline: app.player.isOfflinePlayback,
+                                       dismissOnRequest: true,
+                                       dismissOnSelection: { showingSubtitles = false })
+            }
+        }
         .alert(
             "Picture in Picture unavailable",
             isPresented: pictureInPictureErrorPresented
@@ -203,8 +217,10 @@ struct PlayerScreen: View {
     }
 
     private var playerKeyboardKeys: Set<KeyEquivalent> {
-        showingDetails ? [] : [.space, .leftArrow, .rightArrow, .escape, "o"]
+        showingDetails || selectionIsPresented ? [] : [.space, .leftArrow, .rightArrow, .escape, "o"]
     }
+
+    private var selectionIsPresented: Bool { showingChoice || showingSubtitles }
 
     private var pictureInPictureErrorPresented: Binding<Bool> {
         Binding(
@@ -512,68 +528,43 @@ struct PlayerScreen: View {
     }
 
     private var speedMenu: some View {
-        Menu {
-                    speedPicker
-                } label: {
-                    Text(speedLabel)
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                        .frame(minWidth: 44, minHeight: 44)
-                }
-                .foregroundStyle(.white)
-                .accessibilityLabel("Playback speed")
-                .accessibilityValue(speedLabel)
-                .accessibilityFocused($assistiveFocus, equals: .speed)
+        SelectionPicker(title: "Playback Speed", selection: Binding(
+            get: { app.player.playbackSpeed },
+            set: { app.player.setPlaybackSpeed($0); noteInteraction() }
+        ), options: PlaybackSpeedOption.all.map { SelectionOption(value: $0.value, title: $0.label) },
+            listIdentifier: "speed-choice-list", onPresentationChange: { showingChoice = $0 }) {
+            Text(speedLabel)
+                .font(.subheadline.weight(.semibold).monospacedDigit())
+                .frame(minWidth: 44, minHeight: 44)
+        }
+        .foregroundStyle(.white)
+        .accessibilityLabel("Playback speed")
+        .accessibilityValue(speedLabel)
+        .accessibilityFocused($assistiveFocus, equals: .speed)
     }
 
     private func audioMenu(_ item: MediaItem) -> some View {
-        Menu {
-            Picker("Audio", selection: Binding(
+        SelectionPicker(title: "Audio", selection: Binding(
                 get: { app.player.selectedAudioIndex ?? item.defaultAudioIndex },
                 set: {
                     app.player.selectAudio($0)
                     noteInteraction()
                 }
-            )) {
-                ForEach(item.audioTracks) { track in
-                    Text(audioLabel(track, defaultIndex: item.defaultAudioIndex)).tag(track.index)
-                }
-            }
-        } label: {
+            ), options: item.audioTracks.map { $0.selectionOption(defaultIndex: item.defaultAudioIndex) },
+            listIdentifier: "audio-track-list", onPresentationChange: { showingChoice = $0 }) {
             Text("Audio")
                 .font(.subheadline.weight(.medium))
                 .frame(minWidth: 44, minHeight: 44)
         }
         .foregroundStyle(.white)
         .accessibilityLabel("Audio track")
+        .accessibilityValue(item.audioTracks.first { $0.index == app.player.selectedAudioIndex }?
+            .selectionLabel(defaultIndex: item.defaultAudioIndex) ?? "Default")
         .accessibilityFocused($assistiveFocus, equals: .audio)
     }
 
     private var captionMenu: some View {
-        Menu {
-            Button {
-                app.player.turnSubtitlesOff()
-                noteInteraction()
-            } label: {
-                if app.player.subtitleSelection == .off {
-                    Label("Off", systemImage: "checkmark")
-                } else {
-                    Text("Off")
-                }
-            }
-            ForEach(app.player.subtitleOptions) { caption in
-                Button {
-                    Task { await app.player.selectSubtitle(id: caption.id) }
-                    noteInteraction()
-                } label: {
-                    if app.player.subtitleSelection.active?.id == caption.id {
-                        Label(caption.selection.label, systemImage: "checkmark")
-                    } else {
-                        Text(caption.selection.label)
-                    }
-                }
-                .disabled(!caption.isAvailable)
-            }
-        } label: {
+        Button { showingSubtitles = true; noteInteraction() } label: {
             Image(systemName: app.player.subtitleSelection.active == nil
                   ? "captions.bubble"
                   : "captions.bubble.fill")
@@ -583,20 +574,6 @@ struct PlayerScreen: View {
         .accessibilityLabel("Subtitles")
         .accessibilityValue(app.player.subtitleSelection.accessibilityValue)
         .accessibilityFocused($assistiveFocus, equals: .subtitles)
-    }
-
-    private var speedPicker: some View {
-        Picker("Speed", selection: Binding(
-            get: { app.player.playbackSpeed },
-            set: {
-                app.player.setPlaybackSpeed($0)
-                noteInteraction()
-            }
-        )) {
-            ForEach(PlaybackSpeedOption.all) { option in
-                Text(option.label).tag(option.value)
-            }
-        }
     }
 
     private var speedLabel: String {
@@ -688,11 +665,11 @@ struct PlayerScreen: View {
         autoHideTask?.cancel()
         guard !dynamicTypeSize.isAccessibilitySize, !voiceOverEnabled, !switchControlEnabled,
               assistiveFocus == nil, !usingKeyboard,
-              !showingDetails, !subtitleNeedsAttention, app.player.systemPlaybackNotice == nil,
+              !showingDetails, !selectionIsPresented, !subtitleNeedsAttention, app.player.systemPlaybackNotice == nil,
               app.player.isPlaying, !isScrubbing, app.player.errorMessage == nil else { return }
         autoHideTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled, app.player.isPlaying, !isScrubbing, !showingDetails,
+            guard !Task.isCancelled, app.player.isPlaying, !isScrubbing, !showingDetails, !selectionIsPresented,
                   !dynamicTypeSize.isAccessibilitySize, !usingKeyboard, !voiceOverEnabled,
                   !switchControlEnabled, assistiveFocus == nil,
                   !subtitleNeedsAttention, app.player.systemPlaybackNotice == nil else { return }
@@ -756,12 +733,6 @@ struct PlayerScreen: View {
         }
         scheduleAutoHide()
         return .handled
-    }
-
-    private func audioLabel(_ track: AudioTrack, defaultIndex: Int?) -> String {
-        let title = track.title ?? track.language?.uppercased() ?? "Track \(track.index + 1)"
-        let defaultText = track.index == defaultIndex ? " · Default" : ""
-        return "\(title) · \(track.codec.uppercased()) · \(track.channels) ch\(defaultText)"
     }
 }
 
@@ -919,6 +890,25 @@ private struct PlaybackSpeedOption: Identifiable {
     }
 }
 
+private struct PlaybackViewingOptions: View {
+    @EnvironmentObject private var app: AppModel
+
+    var body: some View {
+        SelectionPicker(title: "Playback Speed", selection: Binding(
+            get: { app.player.playbackSpeed }, set: { app.player.setPlaybackSpeed($0) }
+        ), options: PlaybackSpeedOption.all.map { SelectionOption(value: $0.value, title: $0.label) },
+            listIdentifier: "speed-choice-list") {
+            LabeledContent("Speed", value: PlaybackSpeedOption.label(for: app.player.playbackSpeed))
+                .frame(minHeight: 44)
+        }
+        SelectionPicker(title: "Video Size", selection: Binding(
+            get: { app.player.resizeMode }, set: { app.player.resizeMode = $0 }
+        ), options: VideoResizeMode.allCases.map { SelectionOption(value: $0, title: $0.label) }) {
+            LabeledContent("Video Size", value: app.player.resizeMode.label).frame(minHeight: 44)
+        }
+    }
+}
+
 private struct LocalPlaybackOptionsView: View {
     @EnvironmentObject private var app: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -964,27 +954,14 @@ private struct LocalPlaybackOptionsView: View {
     }
 
     private func trackRow(_ track: LocalPlaybackTrack, selected: Bool) -> some View {
-        HStack {
-            Text(track.title + (track.isForced ? " · Forced" : "") + (track.isDefault ? " · Default" : ""))
-            Spacer()
-            if selected { Image(systemName: "checkmark") }
-        }
+        SelectionRow(title: track.displayName,
+                     subtitle: [track.isForced ? "Forced" : nil, track.isDefault ? "Default" : nil]
+                        .compactMap { $0 }.joined(separator: " · "), selected: selected)
     }
 
     private var speedAndSizeSection: some View {
         Section("Viewing") {
-            Picker("Speed", selection: Binding(
-                get: { app.player.playbackSpeed },
-                set: { app.player.setPlaybackSpeed($0) }
-            )) {
-                ForEach(PlaybackSpeedOption.all) { Text($0.label).tag($0.value) }
-            }
-            Picker("Video Size", selection: Binding(
-                get: { app.player.resizeMode },
-                set: { app.player.resizeMode = $0 }
-            )) {
-                ForEach(VideoResizeMode.allCases) { Text($0.label).tag($0) }
-            }
+            PlaybackViewingOptions()
         }
     }
 }
@@ -1009,18 +986,7 @@ private struct PlaybackOptionsView: View {
         NavigationStack {
             List {
                 Section("Viewing") {
-                    Picker("Speed", selection: Binding(
-                        get: { app.player.playbackSpeed },
-                        set: { app.player.setPlaybackSpeed($0) }
-                    )) {
-                        ForEach(PlaybackSpeedOption.all) { Text($0.label).tag($0.value) }
-                    }
-                    Picker("Video Size", selection: Binding(
-                        get: { app.player.resizeMode },
-                        set: { app.player.resizeMode = $0 }
-                    )) {
-                        ForEach(VideoResizeMode.allCases) { Text($0.label).tag($0) }
-                    }
+                    PlaybackViewingOptions()
                 }
                 Section("Streaming") {
                     if let notice = app.player.qualityNotice {
@@ -1028,30 +994,19 @@ private struct PlaybackOptionsView: View {
                             .font(.caption).foregroundStyle(.secondary)
                             .accessibilityIdentifier("stream-quality-notice")
                     }
-                    Menu {
-                        Picker("Mode", selection: Binding(
+                    SelectionPicker(title: "Mode", selection: Binding(
                             get: { draft.mode },
                             set: { draft.selectMode($0) }
-                        )) {
-                            ForEach(PlaybackMode.allCases) { Text($0.label).tag($0) }
-                        }
-                    } label: {
+                        ), options: PlaybackMode.allCases.map { SelectionOption(value: $0, title: $0.label) }) {
                         streamingPreferenceLabel("Mode", value: draft.mode.label)
                     }
                     .accessibilityIdentifier("stream-mode")
                     .accessibilityLabel("Mode")
                     .accessibilityValue(draft.mode.label)
-                    Menu {
-                        Picker("Quality", selection: Binding(
+                    SelectionPicker(title: "Quality", selection: Binding(
                             get: { draft.quality },
                             set: { draft.selectQuality($0) }
-                        )) {
-                            if !profiles.contains(where: { $0.id == "auto" }) { Text("Auto").tag("auto") }
-                            ForEach(profiles) { profile in
-                                Text(profile.label).tag(profile.id)
-                            }
-                        }
-                    } label: {
+                        ), options: qualityOptions, listIdentifier: "quality-choice-list") {
                         streamingPreferenceLabel("Quality", value: selectedQualityLabel)
                     }
                     .accessibilityIdentifier("stream-quality")
@@ -1079,6 +1034,11 @@ private struct PlaybackOptionsView: View {
         profiles.first(where: { $0.id == draft.quality })?.label ?? "Auto"
     }
 
+    private var qualityOptions: [SelectionOption<String>] {
+        (profiles.contains(where: { $0.id == "auto" }) ? [] : [SelectionOption(value: "auto", title: "Auto")])
+            + profiles.map { SelectionOption(value: $0.id, title: $0.label) }
+    }
+
     private func streamingPreferenceLabel(_ title: String, value: String) -> some View {
         let layout = dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
@@ -1101,17 +1061,9 @@ private struct PlaybackOptionsView: View {
                     app.player.selectAudio(track.index)
                     dismiss()
                 } label: {
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(track.title ?? track.language?.uppercased() ?? "Track \(track.index + 1)")
-                            Text("\(track.codec.uppercased()) · \(track.channels) channels\(track.index == item.defaultAudioIndex ? " · Default" : "")")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if track.index == app.player.selectedAudioIndex {
-                            Image(systemName: "checkmark").foregroundStyle(Color("AccessibleAccent"))
-                        }
-                    }
+                    SelectionRow(title: track.displayName,
+                        subtitle: track.selectionOption(defaultIndex: item.defaultAudioIndex).subtitle,
+                        selected: track.index == app.player.selectedAudioIndex)
                 }
                 .foregroundStyle(.primary)
             }
@@ -1180,7 +1132,7 @@ private struct PlaybackChapterLabel: View {
 
 /// A sheet has a separate responder chain from the presenting SwiftUI player.
 /// Acquire it after presentation so Escape does not depend on a List row's focus.
-private struct OptionsKeyboardDismissal: UIViewControllerRepresentable {
+struct OptionsKeyboardDismissal: UIViewControllerRepresentable {
     let onDismiss: () -> Void
 
     func makeUIViewController(context: Context) -> OptionsKeyboardController {
@@ -1199,7 +1151,7 @@ private struct OptionsKeyboardDismissal: UIViewControllerRepresentable {
     }
 }
 
-private final class OptionsKeyboardController: UIViewController {
+final class OptionsKeyboardController: UIViewController {
     var onDismiss: (() -> Void)?
     private var ownsKeyboard = false
 

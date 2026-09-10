@@ -39,6 +39,8 @@ final class DownloadManager: ObservableObject {
     private var inventoryTask: Task<Void, Never>?
     private var pollSchedule: [UUID: DownloadPollSchedule] = [:]
     private var finalMediaLengths: [UUID: Int64] = [:]
+    private var pendingPauses: Set<UUID> = []
+    private var pendingCancellations: Set<UUID> = []
     private var network: NWPathMonitor?
     private var networkAvailable = true
     private var networkIsCellular = false
@@ -213,8 +215,10 @@ final class DownloadManager: ObservableObject {
             }
             path = original
         } else {
-            path = client.compatiblePath(for: item, delivery: "mp4", quality: quality, audioIndex: audioIndex,
-                                        preparedIdentity: PreparedPlaybackIdentity(session: UInt64.random(in: 1...UInt64.max), generation: 1))
+            // The server's status lookup can be scoped by movie/request alone.
+            // Use the client's unique initial request identity so concurrent
+            // renditions cannot observe another download or player's producer.
+            path = client.compatiblePath(for: item, delivery: "mp4", quality: quality, audioIndex: audioIndex)
         }
         _ = try client.authorizedRequest(serverPath: path)
         let audio = audioIndex ?? item.defaultAudioIndex
@@ -263,9 +267,25 @@ final class DownloadManager: ObservableObject {
     }
 
     func pause(_ download: ActiveDownload) {
-        guard let entry = entry(download.id), !entry.state.isTerminal, entry.state != .failed else { return }
+        guard let entry = entry(download.id), !entry.state.isTerminal,
+              !pendingCancellations.contains(entry.id),
+              ![.failed, .paused, .pausing].contains(entry.state), pendingPauses.insert(entry.id).inserted else { return }
+        // Stop network delivery immediately, even when another movie is being
+        // inspected ahead of the durable pause operation.
+        suspendTransfers(entry)
         setVisiblePhase(download.id, .pausing)
-        enqueueOperation { [weak self] in try await self?.pauseJob(entry.id, userInitiated: true) }
+        enqueueOperation { [weak self] in
+            guard let self else { return }
+            defer { self.pendingPauses.remove(entry.id); self.publish() }
+            do { try await self.pauseJob(entry.id, userInitiated: true) }
+            catch {
+                // A rejected durable pause must not strand a suspended task.
+                for resource in self.entry(entry.id)?.resources ?? [] {
+                    if let task = self.tasks[resource.transferID], task.state == .suspended { task.resume() }
+                }
+                throw error
+            }
+        }
     }
 
     func resume(_ download: ActiveDownload) {
@@ -328,12 +348,19 @@ final class DownloadManager: ObservableObject {
     }
 
     func cancel(_ download: ActiveDownload) {
+        guard let entry = entry(download.id), !entry.state.isTerminal,
+              pendingCancellations.insert(download.id).inserted else { return }
         startBackgroundOwnership()
+        // Acknowledge the tap and stop receiving immediately. Keep tasks owned
+        // until the tombstone commits so a storage error can restore the row.
+        suspendTransfers(entry)
+        publish()
         // Cancellation may overtake media inspection. The actor rechecks its
         // durable tombstone after inspection returns; the UI never waits for it.
         let previous = pending
         let cancellation = Task { [weak self] in
-            guard let self, let entry = self.entry(download.id) else { return }
+            guard let self else { return }
+            defer { self.pendingCancellations.remove(download.id); self.publish() }
             await self.startup?.value
             if self.provisional[download.id] != nil { await previous?.value }
             do {
@@ -341,6 +368,13 @@ final class DownloadManager: ObservableObject {
                 await self.cancelTransfers(entry)
                 self.cancelPreparedRequest(entry.metadata)
             } catch {
+                if let snapshot = try? await self.storage.snapshot() { self.apply(snapshot) }
+                if self.entry(download.id)?.state.isTerminal == false {
+                    for resource in self.entry(download.id)?.resources ?? [] {
+                        if let task = self.tasks[resource.transferID], task.state == .suspended,
+                           !self.pendingPauses.contains(download.id) { task.resume() }
+                    }
+                }
                 self.failure = UserFacingError(error)
                 self.errorMessage = self.failure?.message
             }
@@ -388,7 +422,8 @@ final class DownloadManager: ObservableObject {
     func preparationProgress(for download: ActiveDownload) -> DownloadPreparationProgress? { preparationProgress[download.id] }
 
     func resourceProgress(_ envelope: DownloadTaskEnvelope, received: Int64, expected: Int64?) {
-        guard let (entry, resource) = owned(envelope), resource.state == .running else { return }
+        guard !pendingPauses.contains(envelope.metadata.recordID),
+              let (entry, resource) = owned(envelope), resource.state == .running else { return }
         if let limit = resource.sizeLimit, received > limit {
             tasks[resource.transferID]?.cancel()
             Task { [weak self] in
@@ -576,7 +611,8 @@ final class DownloadManager: ObservableObject {
             }
         }
         var slots = max(0, maximumTransfers - tasks.count)
-        let ordered = journal.filter { !$0.state.isTerminal && ![.failed, .paused, .pausing].contains($0.state) }
+        let ordered = journal.filter { !$0.state.isTerminal && ![.failed, .paused, .pausing].contains($0.state)
+            && !pendingPauses.contains($0.id) && !pendingCancellations.contains($0.id) }
             .sorted {
                 let left = $0.enqueuedAt ?? .distantPast, right = $1.enqueuedAt ?? .distantPast
                 return left == right ? $0.id.uuidString < $1.id.uuidString : left < right
@@ -773,6 +809,12 @@ final class DownloadManager: ObservableObject {
         }
     }
 
+    private func suspendTransfers(_ entry: DownloadQueueEntry) {
+        for resource in entry.resources ?? [] {
+            if let task = tasks[resource.transferID], task.state == .running { task.suspend() }
+        }
+    }
+
     private var allSessionIdentifiers: [String] {
         let legacy = [sessionIdentifier] + DownloadSessionPolicy.allCases.map { sessionIdentifier + "." + $0.rawValue }
         let recorded = journal.flatMap { $0.resources ?? [] }.compactMap(\.sessionIdentifier).filter { isOriginSession($0) }
@@ -828,7 +870,8 @@ final class DownloadManager: ObservableObject {
     }
     private func entry(_ id: UUID) -> DownloadQueueEntry? { journal.first { $0.id == id } ?? provisional[id] }
     private func owned(_ envelope: DownloadTaskEnvelope) -> (DownloadQueueEntry, DownloadResourceDescriptor)? {
-        guard let entry = entry(envelope.metadata.recordID), !entry.state.isTerminal,
+        guard !pendingCancellations.contains(envelope.metadata.recordID),
+              let entry = entry(envelope.metadata.recordID), !entry.state.isTerminal,
               entry.metadata.attemptID == envelope.metadata.attemptID,
               let resource = entry.resources?.first(where: { $0.id == envelope.resourceID && $0.transferID == envelope.transferID }) else { return nil }
         return (entry, resource)
@@ -882,6 +925,8 @@ final class DownloadManager: ObservableObject {
                 row.taskIdentifier = -1
             }
             if let prior = previous[row.id], entry.state == .running, case .downloading = prior.phase { row.phase = prior.phase }
+            if pendingPauses.contains(row.id) { row.phase = .pausing }
+            if pendingCancellations.contains(row.id) { row.phase = .cancelling }
             return row
         }.sorted { (entry($0.id)?.enqueuedAt ?? .distantPast) < (entry($1.id)?.enqueuedAt ?? .distantPast) }
         let live = Set(active.map(\.id))
@@ -890,7 +935,9 @@ final class DownloadManager: ObservableObject {
         finalMediaLengths = finalMediaLengths.filter { transfers.contains($0.key) }
     }
     private func setVisiblePhase(_ id: UUID, _ phase: DownloadPhase) {
-        if let index = active.firstIndex(where: { $0.id == id }) { active[index].phase = phase }
+        if let index = active.firstIndex(where: { $0.id == id }) {
+            active[index].phase = pendingCancellations.contains(id) ? .cancelling : pendingPauses.contains(id) ? .pausing : phase
+        }
     }
 
     // Compatibility entry points used by restoration/installation regression
@@ -942,7 +989,7 @@ final class DownloadManager: ObservableObject {
             && $0.resources?.contains(where: { $0.resource.kind == .media && $0.state == .running
                 && tasks[$0.transferID]?.state == .running
                 && $0.scheduledAt.map({ $0 <= now }) != false }) == true })
-            .filter({ pollState(for: $0).next <= now && !pollState(for: $0).unsupported })
+            .filter({ pollState(for: $0).next <= now && (!pollState(for: $0).unsupported || pollState(for: $0).fetchFinalSize) })
             .min(by: { pollState(for: $0).next < pollState(for: $1).next }),
               let path = entry.metadata.serverPath,
               let resource = entry.resources?.first(where: { $0.resource.kind == .media && $0.state == .running }),
@@ -950,8 +997,15 @@ final class DownloadManager: ObservableObject {
         let envelope = DownloadTaskEnvelope(metadata: entry.metadata, resource: resource)
         var schedule = pollState(for: entry)
         if schedule.fetchFinalSize {
-            schedule.lengthAttempts += 1
-            let length = try? await client.completedDownloadByteCount(serverPath: path)
+            schedule.lengthAttempts = min(3, schedule.lengthAttempts + 1)
+            let length: Int64?
+            var sizeEndpointUnavailable = false
+            do { length = try await client.completedDownloadByteCount(serverPath: path) }
+            catch {
+                length = nil
+                if case RustyDLNAError.authenticationFailed = error { sizeEndpointUnavailable = true }
+                if case RustyDLNAError.http(let code, _, _) = error, [404, 405, 501].contains(code) { sizeEndpointUnavailable = true }
+            }
             guard !Task.isCancelled, tasks[resource.transferID] === mediaTask, mediaTask.state == .running,
                   let current = owned(envelope), current.1.state == .running,
                   current.0.metadata.serverPath == path, DownloadOwnership.matches(entry.metadata, connection: connection) else { return }
@@ -960,11 +1014,18 @@ final class DownloadManager: ObservableObject {
                 if case .downloading(_, let bytes, _) = row.phase { received = bytes } else { received = 0 }
                 if length >= received {
                     finalMediaLengths[resource.transferID] = length
+                    if let preparation = preparationProgress[entry.id] {
+                        preparationProgress[entry.id] = DownloadPreparationProgress(
+                            producedSeconds: preparation.producedSeconds, durationSeconds: entry.metadata.durationSeconds, isComplete: true)
+                    }
                     resourceProgress(envelope, received: received, expected: length)
                 }
             }
-            schedule.fetchFinalSize = finalMediaLengths[resource.transferID] == nil && schedule.lengthAttempts < 3
-            schedule.next = Date().addingTimeInterval(3)
+            schedule.fetchFinalSize = !sizeEndpointUnavailable && finalMediaLengths[resource.transferID] == nil
+                && (schedule.sizeOnly || schedule.lengthAttempts < 3)
+            // Without the optional status endpoint, an unknown-length HEAD is
+            // expected while output grows. Keep checking at a bounded cadence.
+            schedule.next = Date().addingTimeInterval(schedule.sizeOnly ? 60 : 3)
             pollSchedule[entry.id] = schedule
             return
         }
@@ -988,7 +1049,17 @@ final class DownloadManager: ObservableObject {
                 schedule.fetchFinalSize = true
                 schedule.next = Date()
             }
-        } catch { schedule.failed(error) }
+        } catch {
+            schedule.failed(error)
+            if case RustyDLNAError.http(let code, _, _) = error, [404, 405, 501].contains(code),
+               finalMediaLengths[resource.transferID] == nil,
+               DownloadProgressValues.expectedByteCount(reported: mediaTask.countOfBytesExpectedToReceive,
+                                                        response: mediaTask.response) == nil {
+                schedule.sizeOnly = true
+                schedule.fetchFinalSize = true
+                schedule.next = Date().addingTimeInterval(15)
+            }
+        }
         pollSchedule[entry.id] = schedule
     }
     private func pollState(for entry: DownloadQueueEntry) -> DownloadPollSchedule {
@@ -1020,6 +1091,7 @@ private struct DownloadPollSchedule {
     var unsupported = false
     var fetchFinalSize = false
     var lengthAttempts = 0
+    var sizeOnly = false
     mutating func succeeded(retryHint: UInt64?) {
         failures = 0
         next = Date().addingTimeInterval(max(3, min(60, Double(retryHint ?? 3))))

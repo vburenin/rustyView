@@ -383,18 +383,13 @@ struct MovieDetailView: View {
 
     private func audioPicker(_ item: MediaItem) -> some View {
         let selectedTrack = item.audioTracks.first { $0.index == selectedAudio }
-        return Menu {
-            Picker("Audio", selection: Binding(get: { selectedAudio }, set: { index in
+        return SelectionPicker(title: "Audio", selection: Binding(get: { selectedAudio }, set: { index in
                 selectedAudio = index
                 if let language = item.audioTracks.first(where: { $0.index == index })?.language {
                     app.playbackPreferences.preferredAudioLanguage = language
                 }
-            })) {
-                ForEach(item.audioTracks) { track in
-                    Text(track.selectionLabel(defaultIndex: item.defaultAudioIndex)).tag(track.index)
-                }
-            }
-        } label: {
+            }), options: item.audioTracks.map { $0.selectionOption(defaultIndex: item.defaultAudioIndex) },
+            listIdentifier: "audio-track-list") {
             selectionLabel(
                 title: "Audio",
                 value: selectedTrack.flatMap { $0.displayName.uppercased() == "UND" ? nil : $0.displayName } ?? "Default",
@@ -410,17 +405,12 @@ struct MovieDetailView: View {
     }
 
     private var qualityPicker: some View {
-        Menu {
-            Picker("Quality", selection: Binding(get: { selectedQuality }, set: { quality in
+        SelectionPicker(title: "Quality", selection: Binding(get: { selectedQuality }, set: { quality in
                 selectedQuality = quality
                 qualityNotice = nil
                 app.playbackPreferences.preferredQualityID = quality
-            })) {
-                ForEach(loadedQualityProfiles ?? []) { profile in
-                    Text(profile.label).tag(profile.id)
-                }
-            }
-        } label: {
+            }), options: (loadedQualityProfiles ?? []).map { SelectionOption(value: $0.id, title: $0.label) },
+            listIdentifier: "quality-choice-list") {
             selectionLabel(
                 title: "Quality",
                 value: selectedQuality == "auto" ? "Auto" : selectedQualityProfile?.label.components(separatedBy: " · ").first ?? selectedQuality,
@@ -453,7 +443,7 @@ struct MovieDetailView: View {
                     ProgressView(value: fraction).accessibilityHidden(true)
                 } else if case .downloading = download.phase {
                     ProgressView()
-                } else if download.phase == .finishing {
+                } else if download.phase == .finishing || download.phase == .cancelling || download.phase == .pausing {
                     ProgressView()
                 }
                 if let preparation = progress.activePreparation {
@@ -472,6 +462,14 @@ struct MovieDetailView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .accessibilityIdentifier("detail-download-bytes-\(download.mediaID)")
+                }
+                if let remaining = progress.remainingByteText {
+                    Text(remaining)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("detail-download-remaining-\(download.mediaID)")
                 }
                 if case .failed(let message) = download.phase {
                     if let failure = download.failure {
@@ -502,13 +500,14 @@ struct MovieDetailView: View {
                     }
                 } else {
                     adaptiveDownloadRow {
-                        if download.phase != .finishing && download.phase != .pausing {
+                        if download.phase != .finishing && download.phase != .pausing && download.phase != .cancelling {
                             Button { app.downloads.pause(download) } label: { downloadActionLabel("Pause") }
                                 .accessibilityLabel("Pause Download")
                         }
                     } trailing: {
                         Button(role: .cancel) { app.downloads.cancel(download) } label: { downloadActionLabel("Cancel") }
                             .accessibilityLabel("Cancel Download")
+                            .disabled(download.phase == .cancelling)
                     }
                     .font(.subheadline)
                 }
@@ -731,6 +730,7 @@ struct MovieDetailView: View {
         case .retrying: "Retrying…"
         case .finishing: "Saving…"
         case .pausing: "Pausing…"
+        case .cancelling: "Cancelling…"
         case .paused: "Paused"
         case .waiting(let reason): reason.message
         case .failed: download.failure == nil ? "Download failed" : nil
@@ -757,7 +757,6 @@ struct MovieDetailView: View {
                 Text(value)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color(uiColor: .label))
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
             }

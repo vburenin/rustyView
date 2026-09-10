@@ -301,6 +301,7 @@ private struct ActiveDownloadRow: View {
                 .buttonStyle(.borderless)
                 .accessibilityIdentifier("active-download-actions-\(download.id.uuidString)")
                 .accessibilityLabel("Download actions for \(download.displayTitle)")
+                .disabled(download.phase == .cancelling)
             }
         }
         .padding(.vertical, 4)
@@ -334,7 +335,7 @@ private struct ActiveDownloadRow: View {
             Button { app.downloads.pause(download) } label: { actionLabel("Pause", icon: "pause.fill") }
                 .buttonStyle(.borderless)
                 .accessibilityLabel("Pause download of \(download.displayTitle)")
-        case .pausing, .finishing:
+        case .pausing, .cancelling, .finishing:
             ProgressView().frame(width: 44, height: 44)
         }
     }
@@ -351,6 +352,7 @@ private struct ActiveDownloadRow: View {
             if let preparation = progressPresentation.activePreparation { preparationText(preparation) }
             else { Text("Queued") }
         case .pausing: Text("Pausing…")
+        case .cancelling: Text("Cancelling…")
         case .paused: Text("Paused")
         case .waiting(let reason):
             switch reason {
@@ -372,6 +374,10 @@ private struct ActiveDownloadRow: View {
                 Text(bytes)
                     .accessibilityIdentifier("download-byte-progress-\(download.mediaID)")
             }
+            if let remaining = progressPresentation.remainingByteText {
+                Text(remaining)
+                    .accessibilityIdentifier("download-bytes-remaining-\(download.mediaID)")
+            }
         case .retrying(_, let scheduledAt, _): Text("Retrying \(scheduledAt, style: .relative)")
         case .finishing: Text("Saving…")
         case .failed: Text(download.failure?.title ?? "Download failed")
@@ -388,7 +394,7 @@ private struct ActiveDownloadRow: View {
     private var canPause: Bool {
         switch download.phase {
         case .queued, .downloading, .retrying, .waiting: true
-        case .pausing, .paused, .finishing, .failed: false
+        case .pausing, .cancelling, .paused, .finishing, .failed: false
         }
     }
 
@@ -397,6 +403,7 @@ private struct ActiveDownloadRow: View {
         switch download.phase {
         case .queued: "Queued"
         case .pausing: "Saving download progress"
+        case .cancelling: "Cancelling download"
         case .paused: "Download paused"
         case .waiting(let reason): reason.message
         case .downloading: "Downloading"
@@ -457,6 +464,7 @@ private struct DownloadedRow: View {
             case .waiting(.wifi): parts.append("Waiting for Wi-Fi")
             case .queued, .waiting, .retrying: parts.append("Copy queued")
             case .pausing: parts.append("Pausing copy")
+            case .cancelling: parts.append("Cancelling copy")
             case .downloading: parts.append("Downloading copy")
             case .finishing: parts.append("Saving copy")
             }

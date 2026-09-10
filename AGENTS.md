@@ -163,6 +163,15 @@ cohesive product rather than independent demos.
   A ready generation may use up to three header-only requests to its exact
   retained media URL to learn the final output size through the shared poller;
   never substitute source size or restart the transfer to obtain a total.
+  If the optional status endpoint is unsupported, probe the same media headers
+  after 15 seconds and then at most once per minute until a final length is
+  available; an unsupported or authentication-rejected HEAD stops those probes.
+  New downloads use unique initial request numbers because older server status
+  lookups can match a movie/request without its session. Both download screens
+  show remaining bytes once the final length is known. Pause and cancel suspend
+  current delivery immediately and retain their pending UI state across late
+  progress callbacks; cancellation remains visible until its durable tombstone
+  commits, with storage failures restoring the actionable transfer.
   Cellular downloads are allowed by default; the persisted
   Settings choice can restrict current and future movie downloads to Wi-Fi.
   The rendition menu is the final download decision: selecting Compatible copy
@@ -474,6 +483,9 @@ or resolution; show the chosen offline format and estimated size to the user.
 - Audio-track selection is a first-class control. Show language, descriptive
   title, codec, channel count, and the server default; preserve the user's
   choice across compatible-stream restarts when that track still exists.
+  Keep the language code visible even when a track has a title. Media and
+  preference selectors use bounded scrollable lists with wrapping rows rather
+  than popup menus, including compact-height landscape presentations.
 - Subtitle selection must include Off, clearly identify language/forced tracks,
   and support server-converted sidecars as well as embedded tracks when the
   playback engine exposes them.

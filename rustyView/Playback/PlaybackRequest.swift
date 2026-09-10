@@ -57,4 +57,5 @@ struct LocalPlaybackTrack: Identifiable, Equatable {
     let language: String?
     let isDefault: Bool
     let isForced: Bool
+    var displayName: String { AudioTrackName.display(title: title, language: language, fallback: "Audio") }
 }

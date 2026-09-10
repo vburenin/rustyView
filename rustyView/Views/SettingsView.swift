@@ -21,21 +21,10 @@ struct SettingsView: View {
             }
 
             Section {
-                Menu {
-                    Picker("Quality", selection: Binding(
+                SelectionPicker(title: "Quality", selection: Binding(
                         get: { app.playbackPreferences.preferredQualityID },
                         set: { app.playbackPreferences.preferredQualityID = $0 }
-                    )) {
-                        Text("Auto").tag("auto")
-                        ForEach(app.library.capabilities?.qualityProfiles.filter { $0.id != "auto" } ?? []) { profile in
-                            Text(profile.label).tag(profile.id)
-                        }
-                        if qualityResolution.notice != nil {
-                            Text("Saved quality")
-                                .tag(app.playbackPreferences.preferredQualityID)
-                        }
-                    }
-                } label: {
+                    ), options: qualityOptions, listIdentifier: "quality-choice-list") {
                     preferenceLabel("Quality", value: qualityLabel)
                 }
                 .accessibilityIdentifier("preferred-quality")
@@ -44,17 +33,13 @@ struct SettingsView: View {
                 if app.library.capabilities != nil, let notice = qualityResolution.notice {
                     Text(notice).font(.footnote).foregroundStyle(Color.primary.opacity(0.75))
                 }
-                Menu {
-                    Picker("Audio language", selection: Binding(
+                SelectionPicker(title: "Audio Language", selection: Binding(
                         get: { app.playbackPreferences.preferredAudioLanguage },
                         set: { app.playbackPreferences.preferredAudioLanguage = $0 }
-                    )) {
-                        Text("Default").tag(String?.none)
-                        ForEach(audioLanguages, id: \.self) { language in
-                            Text(Locale.current.localizedString(forLanguageCode: language) ?? language).tag(Optional(language))
-                        }
-                    }
-                } label: {
+                    ), options: [SelectionOption(value: String?.none, title: "Default")]
+                        + audioLanguages.map { SelectionOption(value: Optional($0),
+                            title: Locale.current.localizedString(forLanguageCode: $0) ?? $0) },
+                    listIdentifier: "audio-language-list") {
                     preferenceLabel("Audio language", value: audioLanguageLabel)
                 }
                 .accessibilityIdentifier("preferred-audio-language")
@@ -147,6 +132,14 @@ struct SettingsView: View {
 
     private var qualityResolution: PlaybackQualityResolution {
         app.playbackPreferences.quality(in: app.library.capabilities?.qualityProfiles ?? [])
+    }
+
+    private var qualityOptions: [SelectionOption<String>] {
+        [SelectionOption(value: "auto", title: "Auto")]
+            + (app.library.capabilities?.qualityProfiles.filter { $0.id != "auto" } ?? [])
+                .map { SelectionOption(value: $0.id, title: $0.label) }
+            + (qualityResolution.notice == nil ? [] : [SelectionOption(
+                value: app.playbackPreferences.preferredQualityID, title: "Saved quality")])
     }
 
     private var qualityLabel: String {

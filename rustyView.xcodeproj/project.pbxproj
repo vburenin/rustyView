@@ -49,6 +49,7 @@
 		60361B4D185E936AF27BC9DA /* AVFoundationOriginTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A63BBEC429ED15C576D8A42 /* AVFoundationOriginTests.swift */; };
 		60FC1B0E3316BF6D824E0D15 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C638E42BC25ABCA2BD77D42 /* KeychainStore.swift */; };
 		62FBC00ABC90A59CE6EA89A4 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0604314EC60FCDECE314D8D1 /* RootView.swift */; };
+		656113B709FC10D8EF492E16 /* AudioTrackName.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25908E4870ACF3E8DA64B17B /* AudioTrackName.swift */; };
 		683D31717C048ABA531994E0 /* SavedMoviesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79E4D877E84E95BF60A876B2 /* SavedMoviesView.swift */; };
 		6841417A8BD338F915D3FCD2 /* ServerConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = D91CE8C827CEED9C07DDB418 /* ServerConnection.swift */; };
 		68FC33DF539B283FDDF12F75 /* RustyDLNAClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8275F4661FBAB081175A711 /* RustyDLNAClient.swift */; };
@@ -60,6 +61,7 @@
 		7D23553998BC1166DD805C6B /* DownloadSchedulingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66F71A08D81EF3FC19940CFA /* DownloadSchedulingTests.swift */; };
 		7D3AE1B5BAEF30E0B5559478 /* SubtitleSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F91EA98AEEADEBCE0153AB9 /* SubtitleSelection.swift */; };
 		812C14F922C89451526EBE09 /* DisplayTitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46C26F925187F2BFF8ACB8D5 /* DisplayTitle.swift */; };
+		853A0073B5208B46B4EF6ABE /* SelectionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A1C32CF930C134EA5AFEB7A /* SelectionPicker.swift */; };
 		86824E7EB22DFEC8BEAC2140 /* PlaybackPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A5BAD550A62F9C1F8AF324D /* PlaybackPreferences.swift */; };
 		8792F9A2CC4BBCDA666CB446 /* DownloadResumeVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7B494121800CA2F2BAF6E6D /* DownloadResumeVault.swift */; };
 		8A61C9FEE5B430D28542BFF2 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = AB5A0695389F5C695A2232E8 /* README.md */; };
@@ -71,6 +73,7 @@
 		99591E28E23DBAC5BE034DEA /* synthetic-playback.ts in Resources */ = {isa = PBXBuildFile; fileRef = A7F6F33F6863E7D9F2CE46BE /* synthetic-playback.ts */; };
 		9A43D5121636B05F8317DC1E /* BackgroundOriginTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 068B13B8FDAE5C8E862221F8 /* BackgroundOriginTests.swift */; };
 		9AC3FBB4FA476E5F188C5E82 /* DownloadsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DF80727CBFD68B8E3FED76A /* DownloadsView.swift */; };
+		9DB0DF2FB2FCCF597995F6D3 /* AudioTrackPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F565BC0F0F73730249C3611 /* AudioTrackPresentationTests.swift */; };
 		9EB3983911FF5F6A0B697A55 /* DownloadStorageTransactionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FB39FDB021F5B496FE02DAC /* DownloadStorageTransactionTests.swift */; };
 		9F9321DCFEAFAC044FED83A2 /* PlaybackPreferencesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2ABAB5E97BB08B9378244D /* PlaybackPreferencesTests.swift */; };
 		A24DAC3E6BF2CDD66CAB739B /* AuthenticatedMediaAsset.swift in Sources */ = {isa = PBXBuildFile; fileRef = C894661B01D65C2D8C033728 /* AuthenticatedMediaAsset.swift */; };
@@ -148,10 +151,12 @@
 		21FCBCC5C402C4C97724CCE7 /* UserFacingError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserFacingError.swift; sourceTree = "<group>"; };
 		23C7EB3917607612D83875A7 /* SavedLibraryPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedLibraryPresentation.swift; sourceTree = "<group>"; };
 		2411EC0D555EB7EC6434E555 /* MovieMetadataCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieMetadataCacheTests.swift; sourceTree = "<group>"; };
+		25908E4870ACF3E8DA64B17B /* AudioTrackName.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioTrackName.swift; sourceTree = "<group>"; };
 		26415AC843AB43C767922832 /* DownloadStorageCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadStorageCoordinator.swift; sourceTree = "<group>"; };
 		27F03C4F9E887891839CFAC7 /* SubtitleViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubtitleViews.swift; sourceTree = "<group>"; };
 		2A33C9CB9F2AD88632D3DD81 /* ConnectionSetupJourneyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionSetupJourneyTests.swift; sourceTree = "<group>"; };
 		2C638E42BC25ABCA2BD77D42 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		2F565BC0F0F73730249C3611 /* AudioTrackPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioTrackPresentationTests.swift; sourceTree = "<group>"; };
 		30ED0EFB5B154D1F9C1C5448 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
 		3510B48A4A978D8E9BBF962A /* WebVTT.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebVTT.swift; sourceTree = "<group>"; };
 		3673F5C5C2692BA5DF9CA44F /* AuthenticatedArtworkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthenticatedArtworkView.swift; sourceTree = "<group>"; };
@@ -164,6 +169,7 @@
 		4497D0F6A769C0CDD83F0AC7 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		46C26F925187F2BFF8ACB8D5 /* DisplayTitle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayTitle.swift; sourceTree = "<group>"; };
 		477C81712E9EF5332608F983 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Shared.xcconfig; sourceTree = "<group>"; };
+		4A1C32CF930C134EA5AFEB7A /* SelectionPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionPicker.swift; sourceTree = "<group>"; };
 		4C2EAD94F2EC3E3F7595BFFA /* PlayerViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerViewController.swift; sourceTree = "<group>"; };
 		4C3194A6ED6A5E5A5D69C9CD /* PlaybackTrustTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackTrustTests.swift; sourceTree = "<group>"; };
 		4F632CA80A3F61FF01721AD0 /* MediaRelayRobustnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaRelayRobustnessTests.swift; sourceTree = "<group>"; };
@@ -272,6 +278,7 @@
 		183874D09BF6263BE983CB79 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				25908E4870ACF3E8DA64B17B /* AudioTrackName.swift */,
 				46C26F925187F2BFF8ACB8D5 /* DisplayTitle.swift */,
 				764CDE7916E012093CA93FA4 /* DownloadOutputSummary.swift */,
 				C5F9A0C43CD934DB4D757367 /* MovieMetadata.swift */,
@@ -373,6 +380,7 @@
 				7335FCBED5F02988A06A9BAC /* PlayerScreen.swift */,
 				0604314EC60FCDECE314D8D1 /* RootView.swift */,
 				79E4D877E84E95BF60A876B2 /* SavedMoviesView.swift */,
+				4A1C32CF930C134EA5AFEB7A /* SelectionPicker.swift */,
 				4497D0F6A769C0CDD83F0AC7 /* SettingsView.swift */,
 				27F03C4F9E887891839CFAC7 /* SubtitleViews.swift */,
 			);
@@ -420,6 +428,7 @@
 			isa = PBXGroup;
 			children = (
 				37FAA6C38FD3A72D5C4E253E /* ArtworkPipelinePerformanceTests.swift */,
+				2F565BC0F0F73730249C3611 /* AudioTrackPresentationTests.swift */,
 				1A63BBEC429ED15C576D8A42 /* AVFoundationOriginTests.swift */,
 				068B13B8FDAE5C8E862221F8 /* BackgroundOriginTests.swift */,
 				6B3AC466004F314D71CBBF12 /* BrowseRestorationTests.swift */,
@@ -623,6 +632,7 @@
 				010A8AAD9A43B4D4DC9B794B /* AppModel.swift in Sources */,
 				90EA21E569DCD300EFB0A84A /* AppSettings.swift in Sources */,
 				C0485BA8D1E39900D788F0A5 /* ArtworkPipeline.swift in Sources */,
+				656113B709FC10D8EF492E16 /* AudioTrackName.swift in Sources */,
 				3042C73BC5B50118C12B964E /* AuthenticatedArtworkView.swift in Sources */,
 				A24DAC3E6BF2CDD66CAB739B /* AuthenticatedMediaAsset.swift in Sources */,
 				ABC9998F50FBD6F58CD1B40D /* ConnectionSetupView.swift in Sources */,
@@ -669,6 +679,7 @@
 				E98C8496E54BC2EFAA9CC4C9 /* RustyViewAppDelegate.swift in Sources */,
 				5F980BD6D640FB218FCEA093 /* SavedLibraryPresentation.swift in Sources */,
 				683D31717C048ABA531994E0 /* SavedMoviesView.swift in Sources */,
+				853A0073B5208B46B4EF6ABE /* SelectionPicker.swift in Sources */,
 				6841417A8BD338F915D3FCD2 /* ServerConnection.swift in Sources */,
 				3ACD58B1F3F56C9D60245938 /* ServerModels.swift in Sources */,
 				E7B7D04C8D710AD71F831061 /* SettingsView.swift in Sources */,
@@ -696,6 +707,7 @@
 			files = (
 				60361B4D185E936AF27BC9DA /* AVFoundationOriginTests.swift in Sources */,
 				6CD4AF00ACA8D88DC7640330 /* ArtworkPipelinePerformanceTests.swift in Sources */,
+				9DB0DF2FB2FCCF597995F6D3 /* AudioTrackPresentationTests.swift in Sources */,
 				9A43D5121636B05F8317DC1E /* BackgroundOriginTests.swift in Sources */,
 				4F4709CEC08BF913D57DF927 /* BrowseRestorationTests.swift in Sources */,
 				EC7EC9CDCAC389CFA02E0D1F /* CaptionPlaybackTests.swift in Sources */,
@@ -786,7 +798,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				INFOPLIST_FILE = rustyView/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -970,7 +982,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				INFOPLIST_FILE = rustyView/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

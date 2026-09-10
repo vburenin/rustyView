@@ -56,7 +56,7 @@ struct MovieAudioTrack: Codable, Hashable, Sendable, Identifiable {
     let title: String?
     let isDefault: Bool
     var id: String { serverIndex.map(String.init) ?? "\(language ?? "")|\(title ?? "")|\(codec)|\(channels)" }
-    var displayName: String { title ?? language?.uppercased() ?? "Audio" }
+    var displayName: String { AudioTrackName.display(title: title, language: language, fallback: "Audio") }
     var channelDescription: String {
         switch channels {
         case 1: "Mono"

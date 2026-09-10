@@ -145,6 +145,7 @@ private enum DownloadMetadataPresentation {
 enum DownloadPhase: Equatable, Sendable {
     case queued
     case pausing
+    case cancelling
     case paused(canResume: Bool)
     case waiting(reason: DownloadWaitingReason)
     case downloading(progress: Double, received: Int64, expected: Int64?)

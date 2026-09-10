@@ -79,6 +79,10 @@ skip ten seconds, or use the timeline to find a moment. Audio, subtitles,
 playback speed, and fit or fill controls are available in the player; open
 playback options for chapters and streaming quality.
 
+Audio choices show the language code alongside the track title, codec, and
+channel layout. Audio, subtitle, speed, and quality selectors scroll, with
+wrapping labels so long lists remain usable in portrait and landscape.
+
 With a keyboard, Space plays or pauses, arrow keys skip ten seconds, and O opens
 playback options. Accessibility text sizes keep controls visible until you
 dismiss them.
@@ -132,8 +136,10 @@ starts the download immediately. The choice shows the selected audio, quality,
 and what the copy preserves. Source-file size and estimated output size are
 labelled separately; some copies have no reliable size until downloading.
 
-**Downloads** shows preparation progress and bytes received, with the final size
-when available. Transfer progress continues after preparation finishes. Once the movie is
+**Downloads** and movie details show preparation progress and bytes received.
+Once the final size is available, they also show transfer percentage and bytes
+remaining. Pause and cancel acknowledge the tap immediately while saving progress
+or removing the transfer. Once the movie is
 marked **Ready to Watch**, play it from that tab or tap **Watch Offline** on its detail
 page—even in airplane mode.
 Each movie appears once. If you keep both original and compatible versions,

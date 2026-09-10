@@ -6,6 +6,111 @@ import XCTest
 
 @MainActor
 final class DownloadByteTotalsTests: XCTestCase {
+    func testTwoRenditionsOfOneMovieKeepTheirPreparationStatusSeparate() async throws {
+        let fixture = try ByteTotalsFixture(requestScopedStatus: true)
+        addTeardownBlock { await fixture.cleanUp() }
+        try await fixture.start()
+        try await fixture.startSecondRendition()
+        try await eventually("Both real media requests receive bytes") {
+            fixture.manager.active.count == 2 && fixture.manager.active.allSatisfy {
+                guard case .downloading(_, let received, _) = $0.phase else { return false }
+                return received > 0
+            }
+        }
+        // Match the server's request-number status lookup: the first rendition
+        // is still producing and the second is complete. A reused request=1
+        // makes both status queries resolve to the first producer.
+        fixture.http.setReady()
+        try await eventually("The completed rendition learns its own size while the first is still producing") {
+            guard let second = fixture.manager.active.first(where: { $0.metadata.qualityID == "480p" }),
+                  case .downloading(_, _, let expected) = second.phase else { return false }
+            return expected == Int64(fixture.payload.count)
+        }
+        let first = try XCTUnwrap(fixture.manager.active.first { $0.metadata.qualityID == "auto" })
+        guard case .downloading(_, _, let expected) = first.phase else { return XCTFail("The first transfer must remain active") }
+        XCTAssertNil(expected)
+        XCTAssertEqual(fixture.manager.preparationProgress[first.id]?.isComplete, false)
+        XCTAssertEqual(fixture.http.requests(method: "GET").filter { $0.target.hasPrefix("/web/media/") }.count, 2)
+    }
+
+    func testUnavailableStatusStillDiscoversCompletedOutputWithoutRestartingTransfer() async throws {
+        let fixture = try ByteTotalsFixture(statusUnavailable: true)
+        addTeardownBlock { await fixture.cleanUp() }
+        try await fixture.start()
+        try await eventually("The growing response delivers bytes without preparation metadata") {
+            guard case .downloading(_, let received, let expected) = fixture.manager.active.first?.phase else { return false }
+            return received > 0 && expected == nil
+        }
+        fixture.http.setReady()
+        try await eventually("Final headers remain discoverable when the optional status endpoint is unavailable", timeout: 20) {
+            guard case .downloading(_, let received, let expected) = fixture.manager.active.first?.phase else { return false }
+            return received > 0 && expected == Int64(fixture.payload.count)
+        }
+        XCTAssertEqual(fixture.http.requests(method: "GET").filter { $0.target.hasPrefix("/web/media/") }.count, 1)
+        XCTAssertEqual(fixture.http.requests(method: "GET").filter { $0.target.hasPrefix("/api/web/transcode/") }.count, 1)
+        XCTAssertEqual(fixture.http.requests(method: "HEAD").count, 1)
+        fixture.http.sendSecondChunk()
+        try await eventually("Native progress retains the discovered total") {
+            guard case .downloading(_, let received, let expected) = fixture.manager.active.first?.phase else { return false }
+            return received > Int64(fixture.payload.count / 3) && expected == Int64(fixture.payload.count)
+        }
+    }
+
+    func testAlreadyQueuedByteCallbackCannotUndoAnAcceptedPause() async throws {
+        let fixture = try ByteTotalsFixture()
+        addTeardownBlock { await fixture.cleanUp() }
+        try await fixture.start()
+        try await eventually("Real HTTP bytes reach the running media task") {
+            guard case .downloading(_, let received, _) = fixture.manager.active.first?.phase else { return false }
+            return received > 0
+        }
+        let row = try XCTUnwrap(fixture.manager.active.first)
+        let entry = try XCTUnwrap(DownloadQueueStore(rootDirectory: fixture.root).load().entries.first)
+        let resource = try XCTUnwrap(entry.resources?.first { $0.resource.kind == .media })
+        guard case .downloading(_, let received, let expected) = row.phase else { return XCTFail("Missing native progress") }
+        fixture.manager.pause(row)
+        // URLSession delegates deliver asynchronously to MainActor. A callback
+        // queued before the tap can arrive before the durable pause operation.
+        fixture.manager.resourceProgress(DownloadTaskEnvelope(metadata: entry.metadata, resource: resource),
+                                         received: received, expected: expected)
+        XCTAssertEqual(fixture.manager.active.first?.phase, .pausing)
+        await fixture.manager.waitForPendingOperations()
+        guard case .paused = fixture.manager.active.first?.phase else { return XCTFail("One pause must settle") }
+    }
+
+    func testFailedPauseOrCancelCommitRestoresTheSameLiveTransfer() async throws {
+        for cancel in [false, true] {
+            let files = ByteTotalsSaveFailureFileManager()
+            let fixture = try ByteTotalsFixture(fileManager: files)
+            addTeardownBlock { await fixture.cleanUp() }
+            try await fixture.start()
+            try await eventually("The native transfer has received its first prefix") {
+                guard case .downloading(_, let received, _) = fixture.manager.active.first?.phase else { return false }
+                return received > 0
+            }
+            let row = try XCTUnwrap(fixture.manager.active.first)
+            files.rejectNextSave()
+            if cancel { fixture.manager.cancel(row) }
+            else { fixture.manager.pause(row) }
+            await fixture.manager.waitForPendingOperations()
+            XCTAssertNotNil(fixture.manager.errorMessage)
+            XCTAssertEqual(fixture.manager.active.first?.id, row.id)
+            XCTAssertEqual(try DownloadQueueStore(rootDirectory: fixture.root).load().entries.first?.state, .running)
+            // Rejected persistence must resume the task suspended by the tap,
+            // preserving the original HTTP response and its already-owned bytes.
+            fixture.http.sendSecondChunk()
+            try await eventually("More real bytes arrive after the storage error") {
+                guard case .downloading(_, let received, _) = fixture.manager.active.first?.phase else { return false }
+                return received > Int64(fixture.payload.count / 3)
+            }
+            XCTAssertEqual(fixture.http.requests(method: "GET").filter { $0.target.hasPrefix("/web/media/") }.count, 1)
+            fixture.manager.cancel(try XCTUnwrap(fixture.manager.active.first))
+            await fixture.manager.waitForPendingOperations()
+            XCTAssertTrue(fixture.manager.active.isEmpty)
+            XCTAssertEqual(try DownloadQueueStore(rootDirectory: fixture.root).load().entries.first?.state, .cancelled)
+        }
+    }
+
     func testReadyOutputAddsFinalLengthToAnAlreadyRunningChunkedTransfer() async throws {
         let fixture = try ByteTotalsFixture()
         addTeardownBlock { await fixture.cleanUp() }
@@ -182,6 +287,7 @@ final class DownloadByteTotalsTests: XCTestCase {
         }
         let row = try XCTUnwrap(fixture.manager.active.first)
         fixture.manager.cancel(row)
+        XCTAssertEqual(fixture.manager.active.first?.phase, .cancelling, "A cancel tap must be acknowledged before asynchronous cleanup")
         await fixture.manager.waitForPendingOperations()
         fixture.http.releaseHead()
         try await Task.sleep(for: .milliseconds(300))
@@ -210,17 +316,19 @@ private final class ByteTotalsFixture {
     let http: ByteTotalsHTTP
     let manager: DownloadManager
     private(set) var owner: ServerConnection?
+    private var movie: MediaItem?
 
     init(headBehavior: ByteTotalsHTTP.HeadBehavior = .valid, producingSeconds: Double = 60,
          readySeconds: Double? = 59.5, fileManager: FileManager = .default,
-         growingRangeOnResume: Bool = false) throws {
+         growingRangeOnResume: Bool = false, statusUnavailable: Bool = false, requestScopedStatus: Bool = false) throws {
         // Large enough to cross URLSession's native file-write buffering before
         // the next chunk; every byte belongs to a real generated MP4 fixture.
         let url = try XCTUnwrap(Bundle(for: DownloadByteTotalsTests.self).url(forResource: "synthetic-native-tracks", withExtension: "mp4"))
         payload = try Data(contentsOf: url)
         http = try ByteTotalsHTTP(payload: payload, headBehavior: headBehavior,
                                  producingSeconds: producingSeconds, readySeconds: readySeconds,
-                                 growingRangeOnResume: growingRangeOnResume)
+                                 growingRangeOnResume: growingRangeOnResume, statusUnavailable: statusUnavailable,
+                                 requestScopedStatus: requestScopedStatus)
         manager = DownloadManager(store: DownloadManifestStore(rootDirectory: root, fileManager: fileManager),
             sessionIdentifier: "byte-totals.\(UUID().uuidString)", sessionConfiguration: .ephemeral)
     }
@@ -237,6 +345,7 @@ private final class ByteTotalsFixture {
         item["art_url"] = NSNull()
         response["item"] = item
         let movie = try JSONDecoder().decode(ItemResponse.self, from: JSONSerialization.data(withJSONObject: response)).item
+        self.movie = movie
         manager.configure(connection: connection, statusClient: client)
         await manager.waitForPendingOperations()
         try manager.start(item: movie, kind: .compatible, client: client, quality: "auto", audioIndex: 1)
@@ -244,6 +353,13 @@ private final class ByteTotalsFixture {
         // The caller may change accounts; runtime metadata requests retain the
         // same immutable owner as the original media task.
         client.configure(nil)
+    }
+
+    func startSecondRendition() async throws {
+        let client = RustyDLNAClient(configuration: .ephemeral)
+        client.configure(try XCTUnwrap(owner))
+        try manager.start(item: try XCTUnwrap(movie), kind: .compatible, client: client, quality: "480p", audioIndex: 1)
+        await manager.waitForPendingOperations()
     }
 
     func cleanUp() async {
@@ -273,6 +389,8 @@ private final class ByteTotalsHTTP: @unchecked Sendable {
     private let producingSeconds: Double
     private let readySeconds: Double?
     private let growingRangeOnResume: Bool
+    private let statusUnavailable: Bool
+    private let requestScopedStatus: Bool
     private var ready = false
     private var captured: [Request] = []
     private var sentHeads = 0
@@ -283,12 +401,14 @@ private final class ByteTotalsHTTP: @unchecked Sendable {
     private var expectedAuthorization: String { "Basic " + Data("byte-viewer:synthetic-byte-secret".utf8).base64EncodedString() }
 
     init(payload: Data, headBehavior: HeadBehavior, producingSeconds: Double, readySeconds: Double?,
-         growingRangeOnResume: Bool) throws {
+         growingRangeOnResume: Bool, statusUnavailable: Bool, requestScopedStatus: Bool) throws {
         self.payload = payload
         self.headBehavior = headBehavior
         self.producingSeconds = producingSeconds
         self.readySeconds = readySeconds
         self.growingRangeOnResume = growingRangeOnResume
+        self.statusUnavailable = statusUnavailable
+        self.requestScopedStatus = requestScopedStatus
         listener = try NWListener(using: .tcp, on: .any)
     }
     func requests(method: String) -> [Request] {
@@ -370,14 +490,23 @@ private final class ByteTotalsHTTP: @unchecked Sendable {
                 .split(separator: ":", maxSplits: 1).last?.trimmingCharacters(in: .whitespaces), rangeStart: range)
         lock.lock()
         captured.append(request)
-        let isReady = ready
+        var isReady = ready
         let headNumber = captured.filter { $0.method == "HEAD" }.count
+        if requestScopedStatus, request.target.hasPrefix("/api/web/transcode/") {
+            let generation = URLComponents(string: request.target)?.queryItems?.first { $0.name == "request" }?.value
+            let producer = captured.first {
+                $0.method == "GET" && $0.target.hasPrefix("/web/media/") &&
+                URLComponents(string: $0.target)?.queryItems?.first { $0.name == "request" }?.value == generation
+            }
+            isReady = ready && URLComponents(string: producer?.target ?? "")?.queryItems?.first { $0.name == "quality" }?.value == "480p"
+        }
         lock.unlock()
         guard request.authorization == expectedAuthorization else {
             respondJSON(connection, status: 401, body: "{}")
             return
         }
         if request.method == "HEAD" {
+            guard isReady else { sendHead(connection, extra: ""); return }
             switch headBehavior {
             case .held: heldHead = connection
             case .valid: sendHead(connection, extra: "Content-Length: \(payload.count)\r\n")
@@ -387,6 +516,10 @@ private final class ByteTotalsHTTP: @unchecked Sendable {
                 else { sendHead(connection, extra: "Content-Length: \(payload.count)\r\nContent-Encoding: gzip\r\n") }
             }
         } else if request.target.hasPrefix("/api/web/transcode/") {
+            if statusUnavailable, request.method == "GET" {
+                respondJSON(connection, status: 404, body: "{}")
+                return
+            }
             let url = URLComponents(string: request.target)
             let generation = url?.queryItems?.first { $0.name == "request" }?.value ?? "0"
             let id = url?.path.split(separator: "/").last.map(String.init) ?? "42001"
@@ -453,4 +586,20 @@ private final class ByteTotalsInspectionFileManager: FileManager, @unchecked Sen
     }
 
     func releaseInspection() { release.signal() }
+}
+
+private final class ByteTotalsSaveFailureFileManager: FileManager, @unchecked Sendable {
+    private let lock = NSLock()
+    private var rejectSave = false
+    func rejectNextSave() { lock.lock(); rejectSave = true; lock.unlock() }
+
+    override func createDirectory(at url: URL, withIntermediateDirectories createIntermediates: Bool,
+                                  attributes: [FileAttributeKey: Any]? = nil) throws {
+        lock.lock()
+        let reject = rejectSave && url.lastPathComponent.hasPrefix("byte-totals-")
+        if reject { rejectSave = false }
+        lock.unlock()
+        if reject { throw CocoaError(.fileWriteOutOfSpace) }
+        try super.createDirectory(at: url, withIntermediateDirectories: createIntermediates, attributes: attributes)
+    }
 }

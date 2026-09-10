@@ -253,6 +253,7 @@ final class RustyDLNAClient {
     func completedDownloadByteCount(serverPath: String) async throws -> Int64? {
         var request = try authorizedRequest(serverPath: serverPath)
         request.httpMethod = "HEAD"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 10
         request.setValue("video/mp4, application/octet-stream", forHTTPHeaderField: "Accept")
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")

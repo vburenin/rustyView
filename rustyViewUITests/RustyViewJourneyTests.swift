@@ -383,7 +383,7 @@ final class RustyViewJourneyTests: XCTestCase {
         quality.tap()
         let fullHD = app.buttons.matching(NSPredicate(format: "label CONTAINS '1080p'")).firstMatch
         XCTAssertTrue(fullHD.waitForExistence(timeout: 3))
-        AuditAssertNativeMenuTarget(fullHD, in: app)
+        AuditAssertTarget(fullHD, in: app)
         fullHD.tap()
         let network = app.buttons["download-network-menu"]
         AuditReveal(network, in: app)
@@ -1743,6 +1743,121 @@ final class RustyViewJourneyTests: XCTestCase {
         return app
     }
 
+    @MainActor
+    func testManyAudioTracksShowLanguageAndScrollInBothOrientations() throws {
+        let server = try XCTUnwrap(server)
+        server.useManyAudioTracks()
+        let app = try launchApp()
+        let movie = app.staticTexts["The Clockwork Orchard"]
+        XCTAssertTrue(movie.waitForExistence(timeout: 8))
+        movie.tap()
+        XCTAssertTrue(app.buttons["Audio"].waitForExistence(timeout: 5))
+
+        for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
+            XCUIDevice.shared.orientation = orientation
+            app.buttons["Audio"].tap()
+            let list = app.descendants(matching: .any).matching(identifier: "audio-track-list").firstMatch
+            XCTAssertTrue(list.waitForExistence(timeout: 3), "Audio choices need a bounded, scrollable list")
+            let last = app.buttons["server-audio-73"]
+            for _ in 0..<14 {
+                if last.isHittable && app.frame.contains(last.frame) { break }
+                list.swipeUp()
+            }
+            XCTAssertTrue(last.isHittable, "The last of 24 tracks must remain selectable")
+            XCTAssertTrue(last.label.contains("RUS"))
+            XCTAssertTrue(last.label.contains("Surround mix 24"))
+            XCTAssertGreaterThanOrEqual(last.frame.height, 44)
+            XCTAssertTrue(app.frame.contains(last.frame), "The full row must fit inside the screen")
+            let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            shot.name = "Synthetic-audio-list-\(orientation.rawValue)"
+            shot.lifetime = .keepAlways
+            add(shot)
+            last.tap()
+            XCTAssertTrue(list.waitForNonExistence(timeout: 3))
+            XCTAssertEqual(app.buttons["Audio"].value as? String, "RUS · Surround mix 24 · AAC · Stereo")
+        }
+
+        XCUIDevice.shared.orientation = .portrait
+        app.buttons["Watch"].tap()
+        let timeline = app.descendants(matching: .any).matching(identifier: "player-time-label").firstMatch
+        _ = try waitForElapsedSeconds(in: timeline, atLeast: 1, timeout: 25, revealingControlsIn: app)
+        XCTAssertEqual(server.preparedRequests.last?.audio, "73", "Selection must send the server's track index")
+        showPlayerControls(in: app)
+        app.buttons["Pause"].tap()
+        for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
+            XCUIDevice.shared.orientation = orientation
+            showPlayerControls(in: app)
+            app.buttons["Audio track"].tap()
+            let list = app.descendants(matching: .any).matching(identifier: "audio-track-list").firstMatch
+            XCTAssertTrue(list.waitForExistence(timeout: 3))
+            let track = app.buttons["server-audio-70"]
+            for _ in 0..<14 {
+                if track.isHittable && app.frame.contains(track.frame) { break }
+                list.swipeUp()
+            }
+            XCTAssertTrue(track.isHittable)
+            XCTAssertTrue(track.label.contains("ENG"))
+            XCTAssertTrue(track.label.contains("complete spoken introduction"))
+            XCTAssertTrue(app.frame.contains(track.frame))
+            let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            shot.name = "Synthetic-wrapped-audio-\(orientation.rawValue)"
+            shot.lifetime = .keepAlways
+            add(shot)
+            track.tap()
+            XCTAssertTrue(list.waitForNonExistence(timeout: 3))
+        }
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            server.preparedRequests.last?.audio == "70"
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 8), .completed)
+        for (orientation, speed) in [(UIDeviceOrientation.portrait, "1.75×"), (.landscapeLeft, "2×")] {
+            XCUIDevice.shared.orientation = orientation
+            showPlayerControls(in: app)
+            app.buttons["Playback speed"].tap()
+            let list = app.descendants(matching: .any).matching(identifier: "speed-choice-list").firstMatch
+            XCTAssertTrue(list.waitForExistence(timeout: 3))
+            let choice = app.buttons[speed]
+            for _ in 0..<5 {
+                if choice.isHittable && app.frame.contains(choice.frame) { break }
+                list.swipeUp()
+            }
+            XCTAssertTrue(choice.isHittable)
+            XCTAssertTrue(app.frame.contains(choice.frame))
+            XCTAssertGreaterThanOrEqual(choice.frame.height, 44)
+            choice.tap()
+            XCTAssertTrue(list.waitForNonExistence(timeout: 3))
+            XCTAssertEqual(app.buttons["Playback speed"].value as? String, speed)
+
+            app.buttons["Subtitles"].tap()
+            let captions = app.descendants(matching: .any).matching(identifier: "subtitle-choice-list").firstMatch
+            XCTAssertTrue(captions.waitForExistence(timeout: 3))
+            let lastCaption = app.buttons["caption-track-23"]
+            for _ in 0..<14 {
+                if lastCaption.isHittable && app.frame.contains(lastCaption.frame) { break }
+                captions.swipeUp()
+            }
+            XCTAssertTrue(lastCaption.isHittable)
+            XCTAssertTrue(app.frame.contains(lastCaption.frame))
+            lastCaption.tap()
+            XCTAssertTrue(captions.waitForNonExistence(timeout: 4))
+            XCTAssertTrue(app.staticTexts["Subtitles: Synthetic subtitle."].waitForExistence(timeout: 3))
+        }
+        XCUIDevice.shared.orientation = .portrait
+        showPlayerControls(in: app)
+        app.buttons["Playback options"].tap()
+        XCTAssertTrue(app.navigationBars["Playback Options"].waitForExistence(timeout: 3))
+        try AuditViewingPickerEdges("Speed", selecting: "0.5×", restoring: "2×", in: app)
+        try AuditViewingPickerEdges("Video Size", selecting: "Fill", restoring: "Fit", in: app)
+        app.buttons["stream-quality"].tap()
+        let quality = app.buttons["1080p · 8 Mbps"]
+        XCTAssertTrue(quality.waitForExistence(timeout: 3))
+        AuditAssertTarget(quality, in: app)
+        quality.tap()
+        XCTAssertEqual(app.buttons["stream-quality"].value as? String, "1080p · 8 Mbps")
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Playback Options"].waitForNonExistence(timeout: 3))
+    }
+
     func testBrowseToMovieAndExposeEssentialViewingControls() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = try launchApp()
@@ -1790,7 +1905,7 @@ final class RustyViewJourneyTests: XCTestCase {
         selectedAudio.tap()
         XCTAssertEqual(
             app.buttons["Audio"].value as? String,
-            "French dub · AAC · Stereo",
+            "FRA · French dub · AAC · Stereo",
             "The movie page must keep the selected audio track visible after closing the menu"
         )
 
@@ -2053,7 +2168,7 @@ final class RustyViewJourneyTests: XCTestCase {
         )
         XCTAssertEqual(
             app.staticTexts["active-download-audio"].label,
-            "Audio: French dub · AAC · Stereo"
+            "Audio: FRA · French dub · AAC · Stereo"
         )
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(app.staticTexts["download-storage-used"].exists)
@@ -2329,7 +2444,7 @@ final class RustyViewJourneyTests: XCTestCase {
         )
         XCTAssertEqual(
             app.staticTexts["active-download-audio"].label,
-            "Audio: French dub · AAC · Stereo"
+            "Audio: FRA · French dub · AAC · Stereo"
         )
         let statusReachedServer = XCTNSPredicateExpectation(
             predicate: NSPredicate { [weak self] _, _ in
@@ -2371,6 +2486,47 @@ final class RustyViewJourneyTests: XCTestCase {
     }
 
     @MainActor
+    func testDownloadPauseAndCancelAcceptSingleTapsAcrossTheirHitAreas() throws {
+        let fixture = try XCTUnwrap(server)
+        fixture.controlCompatibleTransfer()
+        let app = try launchApp()
+        let movie = app.staticTexts["The Clockwork Orchard"]
+        XCTAssertTrue(movie.waitForExistence(timeout: 8))
+        movie.tap()
+        let download = app.buttons["Download"]
+        XCTAssertTrue(download.waitForExistence(timeout: 5))
+        reveal(download, in: app)
+        download.tap()
+        app.buttons["Compatible copy"].tap()
+        XCTAssertTrue(app.staticTexts["detail-download-bytes-42001"].waitForExistence(timeout: 8))
+        app.navigationBars.buttons.firstMatch.tap()
+        app.tabBars.buttons["Downloads"].tap()
+
+        let pause = app.buttons["Pause download of The Clockwork Orchard"]
+        XCTAssertTrue(pause.waitForExistence(timeout: 5))
+        // The padded 44-point action must respond outside its text and icon.
+        pause.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.85)).tap()
+        let resume = app.buttons["Resume download of The Clockwork Orchard"]
+        guard resume.waitForExistence(timeout: 4) else { return XCTFail("A single tap inside Pause must pause the download") }
+        resume.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.85)).tap()
+        XCTAssertTrue(pause.waitForExistence(timeout: 4))
+
+        app.buttons["active-download-42001"].tap()
+        let detailPause = app.buttons["Pause Download"]
+        XCTAssertTrue(detailPause.waitForExistence(timeout: 4))
+        reveal(detailPause, in: app)
+        detailPause.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.85)).tap()
+        XCTAssertTrue(app.buttons["Resume Download"].waitForExistence(timeout: 4))
+        let cancel = app.buttons["Cancel Download"]
+        cancel.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.85)).tap()
+        XCTAssertTrue(app.buttons["Download"].waitForExistence(timeout: 4))
+        let stopped = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fixture.validTranscodeCancellationCount == 1
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [stopped], timeout: 4), .completed)
+    }
+
+    @MainActor
     func testCompletedPreparationKeepsShowingTheUnfinishedByteTransfer() throws {
         let fixture = try XCTUnwrap(server)
         fixture.controlCompatibleTransfer()
@@ -2390,21 +2546,26 @@ final class RustyViewJourneyTests: XCTestCase {
         // A background session can batch native file-write callbacks after the
         // server has sent its prefix. Verify the reported amount is possible,
         // without requiring one particular callback boundary.
-        func reportsReceivedPrefix(_ label: String, suffix: String) -> Bool {
-            guard label.hasSuffix(suffix) else { return false }
+        func reportedByteCount(_ label: String, suffix: String) -> Double? {
+            guard label.hasSuffix(suffix) else { return nil }
             let fields = label.dropLast(suffix.count).split(separator: " ")
             let units: [String: Double] = ["byte": 1, "bytes": 1, "KB": 1_000, "MB": 1_000_000, "GB": 1_000_000_000]
             let number = NumberFormatter()
             number.locale = Locale(identifier: "en_US")
             number.numberStyle = .decimal
             guard fields.count == 2, let amount = number.number(from: String(fields[0]))?.doubleValue,
-                  let unit = units[String(fields[1])] else { return false }
-            return amount > 0 && amount * unit <= Double(fixture.controlledPrefixByteCount)
+                  let unit = units[String(fields[1])] else { return nil }
+            return amount * unit
+        }
+        func reportsReceivedPrefix(_ label: String, suffix: String) -> Bool {
+            guard let count = reportedByteCount(label, suffix: suffix) else { return false }
+            return count > 0 && count <= Double(fixture.controlledPrefixByteCount)
         }
         let unknownSize = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             reportsReceivedPrefix(bytes.label, suffix: " downloaded")
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [unknownSize], timeout: 8), .completed)
+        XCTAssertFalse(app.staticTexts["detail-download-remaining-42001"].exists)
         let prepared = app.staticTexts["detail-preparation-progress-42001"]
         XCTAssertTrue(prepared.waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["detail-download-status-42001"].label, "Preparing…")
@@ -2418,6 +2579,13 @@ final class RustyViewJourneyTests: XCTestCase {
                 && app.staticTexts["detail-download-status-42001"].label == "Downloading…"
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [knownSize], timeout: 10), .completed)
+        let remaining = app.staticTexts["detail-download-remaining-42001"]
+        XCTAssertTrue(remaining.exists)
+        let remainingText = remaining.label
+        let bytesLeft = try XCTUnwrap(reportedByteCount(remainingText, suffix: " remaining"))
+        XCTAssertGreaterThan(bytesLeft, Double(fixture.controlledPrefixByteCount) * 1.9,
+                             "Two thirds are still withheld: remaining bytes must not repeat bytes received")
+        XCTAssertLessThanOrEqual(bytesLeft, Double(fixture.controlledPrefixByteCount) * 3.1)
         XCTAssertFalse(prepared.exists, "Completed preparation must not remain a misleading 100% download")
         let percent = try XCTUnwrap(Int(app.staticTexts["detail-download-percent-42001"].label.dropLast()))
         XCTAssertTrue((0...33).contains(percent), "With two thirds withheld, the transfer cannot show preparation's 100%")
@@ -2436,6 +2604,8 @@ final class RustyViewJourneyTests: XCTestCase {
         let rowBytes = app.staticTexts["download-byte-progress-42001"]
         XCTAssertTrue(rowBytes.waitForExistence(timeout: 5))
         XCTAssertTrue(reportsReceivedPrefix(rowBytes.label, suffix: totalSuffix))
+        XCTAssertEqual(app.staticTexts["download-bytes-remaining-42001"].label, remainingText,
+                       "Both screens must retain the same remaining byte count")
         let rowPercent = try XCTUnwrap(Int((app.staticTexts["download-transfer-status-42001"].value as? String ?? "").dropLast()))
         XCTAssertGreaterThanOrEqual(rowPercent, percent, "Navigating must retain received bytes")
         XCTAssertTrue((0...33).contains(rowPercent), "Downloads must show transfer progress, not completed preparation")
@@ -3035,6 +3205,7 @@ private final class SyntheticHTTPServer {
     private var unreadableOriginal = false
     private var usesShortPreparedSegments = false
     private var usesMultiaudio = false
+    private var usesManyAudioTracks = false
     private var usesNativeCaptions = false
     private var auditDeepFolders = false
     private var auditLibraryRejects = false
@@ -3059,6 +3230,7 @@ private final class SyntheticHTTPServer {
     private var controlledHEADs = 0
 
     func controlCompatibleTransfer() { queue.sync { controlsCompatibleTransfer = true } }
+    func useManyAudioTracks() { queue.sync { usesManyAudioTracks = true; usesShortPreparedSegments = true } }
     func finishCompatiblePreparation() { queue.sync { compatiblePreparationFinished = true } }
     var controlledTransferRequests: Int { queue.sync { controlledGETs } }
     var controlledSizeRequests: Int { queue.sync { controlledHEADs } }
@@ -3500,6 +3672,27 @@ private final class SyntheticHTTPServer {
             let payload: String
             if usesNativeCaptions {
                 payload = Self.nativeCaptionItemJSON.replacingOccurrences(of: "8200000000", with: String(nativeCaptionData.count))
+            } else if usesManyAudioTracks {
+                let tracks: [[String: Any]] = (0..<24).map { offset in
+                    ["index": offset * 3 + 4, "codec": "aac", "channels": 2,
+                     "language": offset.isMultiple(of: 2) ? "eng" : "rus",
+                     "title": offset == 22
+                        ? "Surround mix 23 with an alternate commentary recording and a complete spoken introduction"
+                        : "Surround mix \(offset + 1)", "default": offset == 0]
+                }
+                let captions: [[String: Any]] = (0..<24).map { index in
+                    ["index": index, "label": "English captions \(index + 1)", "language": "eng",
+                     "default": false, "source_format": "srt", "browser_supported": true,
+                     "url": "/Captions/42001/\(index).vtt"]
+                }
+                var response = try! JSONSerialization.jsonObject(with: Data(Self.itemJSON.utf8)) as! [String: Any]
+                var item = response["item"] as! [String: Any]
+                item["audio_tracks"] = tracks
+                item["default_audio_index"] = 4
+                item["captions"] = captions
+                response["item"] = item
+                response["audio_tracks"] = tracks
+                payload = String(decoding: try! JSONSerialization.data(withJSONObject: response), as: UTF8.self)
             } else {
                 payload = usesMultiaudio ? Self.offlineTracksItemJSON.replacingOccurrences(of: "8200000000", with: String(multiaudioData.count)) : Self.itemJSON
             }
@@ -3624,7 +3817,8 @@ private final class SyntheticHTTPServer {
             }
             guard target.contains("video_mode=transcode"),
                   target.contains("video_output=h264_sdr"),
-                  target.contains("audio=0") || (usesMultiaudio && (target.contains("audio=8") || target.contains("audio=12"))) else {
+                  target.contains("audio=0") || (usesMultiaudio && (target.contains("audio=8") || target.contains("audio=12")))
+                    || (usesManyAudioTracks && (0..<24).contains { String($0 * 3 + 4) == prepared.audio }) else {
                 send(
                     Data(#"{"schema_version":2,"error":{"code":"synthetic_copy_failure","message":"Synthetic copied stream failed.","recoverable":true,"action":null}}"#.utf8),
                     status: 404,
@@ -3691,7 +3885,8 @@ private final class SyntheticHTTPServer {
             countLock.unlock()
             send(preparedSegmentData, contentType: "video/mp2t", method: method, connection: connection)
             return
-        } else if target.hasPrefix("/Captions/42001/0.vtt") {
+        } else if target.hasPrefix("/Captions/42001/0.vtt")
+                    || (usesManyAudioTracks && target.hasPrefix("/Captions/42001/")) {
             countLock.lock()
             storedCaptionRequestCount += 1
             countLock.unlock()
@@ -4100,7 +4295,7 @@ extension RustyViewJourneyTests {
         quality.tap()
         let automatic = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Auto'")).firstMatch
         XCTAssertTrue(automatic.waitForExistence(timeout: 3))
-        AuditAssertNativeMenuTarget(automatic, in: app)
+        AuditAssertTarget(automatic, in: app)
         automatic.tap()
         XCTAssertTrue((quality.value as? String)?.contains("Auto") == true)
         let download = app.buttons["Download"]
@@ -4233,32 +4428,25 @@ extension RustyViewJourneyTests {
     }
 
     @MainActor
-    private func AuditNativeViewingPicker(_ title: String, selecting choice: String,
+    private func AuditViewingPickerEdges(_ title: String, selecting choice: String,
                                           restoring original: String, in app: XCUIApplication) throws {
         for (selection, topEdge) in [(choice, true), (original, false)] {
             let picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title + ",")).firstMatch
             AuditReveal(picker, in: app)
-            let cells = app.cells.containing(.button, identifier: picker.label).allElementsBoundByIndex
-            XCTAssertEqual(cells.count, 1, "Identify the native Form/List row that owns this exact picker")
-            let cell = try XCTUnwrap(cells.first)
-            AuditReveal(cell, in: app)
-            let rowFrame = cell.frame
-            let innerFrame = picker.frame
+            let rowFrame = picker.frame
             XCTAssertGreaterThanOrEqual(rowFrame.width, 44 - 0.01)
             XCTAssertGreaterThanOrEqual(rowFrame.height, 44 - 0.01)
             XCTAssertTrue(AuditContains(rowFrame, in: AuditContentBounds(app)))
 
-            // Native Picker exposes its inner content in AX. Prove that its
-            // containing row's padding really opens the menu before accepting
-            // that larger row as the touch target.
+            // The app-owned button exposes its complete hit region. Exercise
+            // its top and bottom edges, then select from the scrollable sheet.
             let point = CGPoint(x: rowFrame.midX,
                                 y: topEdge ? rowFrame.minY + 2 : rowFrame.maxY - 2)
             XCTAssertTrue(rowFrame.contains(point))
-            XCTAssertFalse(innerFrame.contains(point), "The tap must exercise padding outside the inner AX button")
             app.coordinate(withNormalizedOffset: .zero)
                 .withOffset(CGVector(dx: point.x - app.frame.minX, dy: point.y - app.frame.minY)).tap()
             let option = app.buttons[selection].firstMatch
-            XCTAssertTrue(option.waitForExistence(timeout: 3), "The \(title) row padding must open its native choices")
+            XCTAssertTrue(option.waitForExistence(timeout: 3), "The \(title) row padding must open its choices")
             option.tap()
             let updated = app.buttons["\(title), \(selection)"]
             XCTAssertTrue(updated.waitForExistence(timeout: 3), "The real picker must publish the selected value")
@@ -4373,8 +4561,8 @@ extension RustyViewJourneyTests {
         AuditReveal(options, in: app)
         options.tap()
         XCTAssertTrue(app.navigationBars["Playback Options"].waitForExistence(timeout: 3))
-        try AuditNativeViewingPicker("Speed", selecting: "2×", restoring: "1×", in: app)
-        try AuditNativeViewingPicker("Video Size", selecting: "Fill", restoring: "Fit", in: app)
+        try AuditViewingPickerEdges("Speed", selecting: "2×", restoring: "1×", in: app)
+        try AuditViewingPickerEdges("Video Size", selecting: "Fill", restoring: "Fit", in: app)
         try FontMatrixCapture(app, name: name, screen: "\(source)-Options-viewing")
         if isOffline {
             XCTAssertFalse(app.buttons["stream-mode"].exists)
@@ -4442,7 +4630,7 @@ extension RustyViewJourneyTests {
         quality.tap()
         let fullHD = app.buttons["1080p · 8 Mbps"]
         XCTAssertTrue(fullHD.waitForExistence(timeout: 3))
-        AuditAssertNativeMenuTarget(fullHD, in: app)
+        AuditAssertTarget(fullHD, in: app)
         fullHD.tap()
         let apply = app.buttons["Apply Streaming Changes"]
         expandPlaybackOptionsIfNeeded(for: apply, in: app)
