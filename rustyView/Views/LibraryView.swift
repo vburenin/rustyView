@@ -28,11 +28,7 @@ struct LibraryView: View {
         .navigationDestination(for: LibraryEntry.self) { entry in
             MovieDetailView(entry: entry)
         }
-        .searchable(text: Binding(
-            get: { app.library.query },
-            set: { app.library.search($0) }
-        ), placement: .navigationBarDrawer(displayMode: .always),
-            prompt: Text("Search movies").foregroundColor(.primary.opacity(0.75)))
+        .modifier(LibrarySearchField(model: app.library, input: app.library.searchInput))
         .safeAreaInset(edge: .bottom) { UserLibraryRecoveryView() }
         .toolbar {
             if app.library.viewMode == .folders, app.library.breadcrumbs.count > 1 {
@@ -245,6 +241,17 @@ struct LibraryView: View {
         .accessibilityLabel("Folder path")
     }
 
+}
+
+private struct LibrarySearchField: ViewModifier {
+    let model: LibraryModel
+    @ObservedObject var input: LibrarySearchInput
+
+    func body(content: Content) -> some View {
+        content.searchable(text: Binding(get: { input.text }, set: { model.search($0) }),
+            placement: .navigationBarDrawer(displayMode: .always),
+            prompt: Text("Search movies").foregroundColor(.primary.opacity(0.75)))
+    }
 }
 
 private struct LibraryTitleFrames: PreferenceKey {

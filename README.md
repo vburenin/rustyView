@@ -72,6 +72,10 @@ session. Loading feedback identifies a new folder or search while its results
 arrive. Empty libraries offer **Refresh**, and an empty search offers a way back
 to your collection.
 
+Search editing is isolated from movie-grid updates, so typing can continue while
+results load. New searches cancel superseded requests, and clearing the field
+restores the previously browsed pages and position.
+
 ## Watch your way
 
 Tap the video to show playback controls. Double-tap the left or right side to

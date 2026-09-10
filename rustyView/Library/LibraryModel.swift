@@ -16,6 +16,13 @@ private struct BrowsePreference: Codable {
     let sort: String
 }
 
+/// The native field observes edits independently of the movie collection. A
+/// keystroke must not invalidate every card and every AppModel subscriber.
+@MainActor
+final class LibrarySearchInput: ObservableObject {
+    @Published fileprivate(set) var text = ""
+}
+
 @MainActor
 final class LibraryModel: ObservableObject {
     @Published private(set) var entries: [LibraryEntry] = []
@@ -29,7 +36,11 @@ final class LibraryModel: ObservableObject {
     @Published private(set) var displayedLocation: BrowseLocation?
     @Published private(set) var visibleAnchor: String?
     @Published private(set) var error: UserFacingError?
-    @Published var query = "" { didSet { if query != oldValue { invalidateRequest() } } }
+    let searchInput = LibrarySearchInput()
+    var query: String {
+        get { searchInput.text }
+        set { setQuery(newValue, endingLoading: true) }
+    }
     @Published var sort = LibrarySort.title { didSet { if sort != oldValue { invalidateRequest() } } }
 
     private struct Snapshot {
@@ -98,9 +109,12 @@ final class LibraryModel: ObservableObject {
         guard value != query else { return }
         saveSnapshot()
         searchTask?.cancel()
-        query = value
-        error = nil
-        isLoading = true
+        // Keep the pending presentation stable while replacing its request.
+        // Publishing false/true for every edit repeatedly rebuilds the grid.
+        if query.isEmpty != value.isEmpty, isLoading { objectWillChange.send() }
+        setQuery(value, endingLoading: false)
+        if error != nil { error = nil }
+        if !isLoading { isLoading = true }
         searchTask = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
             guard let self, !Task.isCancelled else { return }
@@ -195,22 +209,28 @@ final class LibraryModel: ObservableObject {
         owner = nil
     }
 
-    private func invalidateRequest() {
+    private func setQuery(_ value: String, endingLoading: Bool) {
+        guard value != searchInput.text else { return }
+        invalidateRequest(endingLoading: endingLoading)
+        searchInput.text = value
+    }
+
+    private func invalidateRequest(endingLoading: Bool = true) {
         requestEpoch += 1
         requestTask?.cancel()
         requestTask = nil
-        isLoading = false
+        if endingLoading, isLoading { isLoading = false }
     }
 
     private func load(reset: Bool) async throws {
         if let connection = client.connection,
            owner != MovieLibraryKey(connection: connection, mediaID: "") { configureConnection(connection) }
         if !reset && !canLoadMore { return }
-        invalidateRequest()
+        invalidateRequest(endingLoading: false)
         let epoch = requestEpoch
         let requestOwner = client.connection.map { MovieLibraryKey(connection: $0, mediaID: "") }
-        error = nil
-        isLoading = true
+        if error != nil { error = nil }
+        if !isLoading { isLoading = true }
         defer { if epoch == requestEpoch { isLoading = false; requestTask = nil } }
         let request = LibraryRequest(view: viewMode, folderID: folderID, query: query, sort: sort,
                                      offset: reset ? 0 : entries.count, limit: 60,

@@ -66,6 +66,12 @@ cohesive product rather than independent demos.
   and sort. Bounded in-memory snapshots retain entries and visible anchors for
   returning navigation; mode and sort preferences persist by account. A pending
   destination has explicit loading feedback and does not relabel old results.
+  Search text has its own observable owner at the native search-field boundary.
+  Edits cancel the previous request immediately and debounce its replacement
+  without republishing the unchanged grid or toggling loading off/on for every
+  character. Results still require the current request epoch and account. Keep
+  the 1,200-entry rendered regression and held-response typing journey separate:
+  asynchronous HTTP alone does not establish responsive collection rendering.
 - Movie presentation metadata is independent of wire DTOs and cached by canonical
   server/account/movie identity. Local details and artwork use owned files without
   requests. A source-aware playback request routes local and online Watch/chapter

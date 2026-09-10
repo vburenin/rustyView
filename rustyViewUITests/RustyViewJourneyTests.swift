@@ -60,6 +60,33 @@ final class RustyViewJourneyTests: XCTestCase {
         super.tearDown()
     }
 
+    func testSearchKeepsAcceptingTextWhileLongLibraryResponseIsHeld() throws {
+        let fixture = try XCTUnwrap(server)
+        fixture.useLongSearchFixture()
+        let app = try launchApp()
+        XCTAssertTrue(app.staticTexts["Paper Voyage 0001"].waitForExistence(timeout: 8))
+        let search = app.searchFields["Search movies"]
+        search.tap()
+        search.typeText("Paper")
+        let requested = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fixture.searchQueries.contains("Paper")
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [requested], timeout: 4), .completed)
+        XCTAssertTrue(search.isEnabled, "A pending response must never disable the native search field")
+        search.typeText(" Voyage 001")
+        XCTAssertEqual(search.value as? String, "Paper Voyage 001")
+        let latest = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fixture.searchQueries.contains("Paper Voyage 001")
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [latest], timeout: 4), .completed,
+                       "The latest query must reach HTTP before the older response is released")
+        fixture.releaseSearchResponses()
+        XCTAssertTrue(app.staticTexts["Paper Voyage 0010"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Paper Voyage 0001"].exists)
+        search.buttons["Clear text"].tap()
+        XCTAssertTrue(app.staticTexts["Paper Voyage 0001"].waitForExistence(timeout: 5))
+    }
+
     func testEmbeddedCaptionIsActuallyRenderedAndOffRemovesItsPixels() throws {
         let server = try XCTUnwrap(server)
         server.useNativeCaptionFixture()
@@ -3310,6 +3337,20 @@ private final class SyntheticHTTPServer {
     private var populatedBrowseFolder = false
     private var browseChildHeld = false
     private var heldBrowseResponses: [(Data, String, NWConnection)] = []
+    private var longSearchFixture = false
+    private var heldSearchResponses: [(Data, String, NWConnection)] = []
+    private var storedSearchQueries: [String] = []
+    var searchQueries: [String] { queue.sync { storedSearchQueries } }
+    func useLongSearchFixture() { queue.sync { usesPaginatedBrowse = true; longSearchFixture = true } }
+    func releaseSearchResponses() {
+        queue.sync {
+            let pending = heldSearchResponses.reversed()
+            heldSearchResponses = []
+            for (body, method, connection) in pending {
+                send(body, contentType: "application/json", method: method, connection: connection)
+            }
+        }
+    }
     private var heldMediaRequests: [(String, NWConnection)] = []
     private var startError: Error?
 
@@ -3602,6 +3643,8 @@ private final class SyntheticHTTPServer {
             heldMediaRequests = []
             for (_, _, connection) in heldBrowseResponses { connection.cancel() }
             heldBrowseResponses = []
+            for (_, _, connection) in heldSearchResponses { connection.cancel() }
+            heldSearchResponses = []
         }
         listener.cancel()
     }
@@ -3677,6 +3720,11 @@ private final class SyntheticHTTPServer {
                 storedBrowseOffsets.append(Int(Self.queryValue(named: "offset", in: target) ?? "0") ?? 0)
                 countLock.unlock()
                 let payload = browsePayload(target)
+                if longSearchFixture, let query = Self.queryValue(named: "q", in: target), !query.isEmpty {
+                    storedSearchQueries.append(query)
+                    heldSearchResponses.append((payload, method, connection))
+                    return
+                }
                 if browseChildHeld, target.contains("folder=62011") {
                     heldBrowseResponses.append((payload, method, connection))
                     return
@@ -4114,7 +4162,8 @@ private final class SyntheticHTTPServer {
         func movie(_ index: Int) -> [String: Any] {
             var value = template
             value["id"] = String(81000 + index)
-            value["title"] = usesOfflineCollection ? Self.collectionTitle(index) : String(format: "Paper Voyage %02d", index + 1)
+            value["title"] = usesOfflineCollection ? Self.collectionTitle(index)
+                : String(format: longSearchFixture ? "Paper Voyage %04d" : "Paper Voyage %02d", index + 1)
             if largePosterData != nil {
                 value["art_url"] = "/ArtworkBenchmark/\(largePosterNamespace)/\(81000 + index).jpg"
             } else {
@@ -4145,7 +4194,7 @@ private final class SyntheticHTTPServer {
             }
             page["folder"] = breadcrumbs.last
         } else {
-            entries = (0..<(usesOfflineCollection ? 7 : 36)).map(movie)
+            entries = (0..<(usesOfflineCollection ? 7 : longSearchFixture ? 720 : 36)).map(movie)
             page["folder"] = NSNull()
         }
         if !query.isEmpty { entries = entries.filter { ($0["title"] as? String)?.localizedCaseInsensitiveContains(query) == true } }
@@ -4154,10 +4203,11 @@ private final class SyntheticHTTPServer {
         page["query"] = query
         page["sort"] = Self.queryValue(named: "sort", in: target) ?? "title"
         page["offset"] = offset
-        page["limit"] = 12
+        let limit = longSearchFixture ? 60 : 12
+        page["limit"] = limit
         page["total"] = entries.count
-        page["has_more"] = offset + 12 < entries.count
-        page["entries"] = Array(entries.dropFirst(offset).prefix(12))
+        page["has_more"] = offset + limit < entries.count
+        page["entries"] = Array(entries.dropFirst(offset).prefix(limit))
         return (try? JSONSerialization.data(withJSONObject: page)) ?? Data()
     }
 

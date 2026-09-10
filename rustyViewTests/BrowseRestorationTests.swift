@@ -1,9 +1,84 @@
 import Foundation
+import Combine
+import SwiftUI
 import XCTest
 @testable import rustyView
 
 @MainActor
 final class BrowseRestorationTests: XCTestCase {
+    func testTypingInRenderedLongLibraryDoesNotRepublishUnchangedResults() async throws {
+        let namespace = "search-rendering-\(UUID().uuidString)"
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(namespace)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
+        let settings = AppSettings(defaults: defaults, secrets: KeychainStore(service: namespace))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [BrowseHTTPProtocol.self]
+        let client = RustyDLNAClient(configuration: configuration)
+        let requests = BrowseRequests()
+        let replies = BrowseDelayedReplies()
+        BrowseHTTPProtocol.handler = { request, reply in
+            let values = requests.capture(request)
+            if values["q"] != "" {
+                replies.store { reply(Self.page(values, ids: ["1199"])) }
+            } else {
+                let offset = Int(values["offset"] ?? "0") ?? 0
+                reply(Self.page(values, ids: (offset..<min(offset + 60, 1200)).map(String.init),
+                                total: 1200, hasMore: offset + 60 < 1200))
+            }
+        }
+        let downloads = DownloadManager(store: DownloadManifestStore(rootDirectory: root.appendingPathComponent("downloads")),
+                                        sessionConfiguration: .ephemeral)
+        let app = AppModel(settings: settings, client: client, downloads: downloads,
+            movieCache: MovieMetadataCache(directory: root.appendingPathComponent("metadata")),
+            userLibrary: UserLibraryStore(directory: root.appendingPathComponent("library"),
+                                         legacyProgressStore: PlaybackProgressStore(defaults: defaults)),
+            playbackPreferences: PlaybackPreferences(defaults: defaults))
+        defer {
+            app.disconnect()
+            defaults.removePersistentDomain(forName: namespace)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let connected = await app.connect(serverAddress: "https://media.example.test", username: "viewer", password: "synthetic-secret")
+        XCTAssertTrue(connected)
+        while app.library.canLoadMore { await app.library.loadMoreIfNeeded(after: try XCTUnwrap(app.library.entries.last)) }
+        XCTAssertEqual(app.library.entries.count, 1200)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UIHostingController(rootView: NavigationStack { LibraryView().environmentObject(app) })
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; previous?.makeKeyAndVisible() }
+        try await Task.sleep(for: .milliseconds(400))
+        app.library.search("S")
+        try await waitUntil { requests.values.contains { $0["q"] == "S" } }
+        try await Task.sleep(for: .milliseconds(100))
+        var publications = 0
+        let observation = app.objectWillChange.sink { _ in publications += 1 }
+        defer { observation.cancel() }
+        var before = rusage()
+        getrusage(RUSAGE_SELF, &before)
+        var query = "S"
+        for character in "ynthetic Movie 1199" {
+            query.append(character)
+            app.library.search(query)
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        XCTAssertEqual(app.library.query, query)
+        try await waitUntil { requests.values.last?["q"] == query }
+        var after = rusage()
+        getrusage(RUSAGE_SELF, &after)
+        let cpu = Double(after.ru_utime.tv_sec + after.ru_stime.tv_sec - before.ru_utime.tv_sec - before.ru_stime.tv_sec)
+            + Double(after.ru_utime.tv_usec + after.ru_stime.tv_usec - before.ru_utime.tv_usec - before.ru_stime.tv_usec) / 1_000_000
+        print("SEARCH_RENDER_PROFILE entries=1200 publications=\(publications) process_cpu_seconds=\(cpu)")
+        XCTAssertLessThanOrEqual(publications, 4, "Typing while results are unchanged must not repeatedly rebuild the entire app and grid")
+        XCTAssertEqual(app.library.entries.count, 1200, "Keep the displayed results until the current reply arrives")
+        XCTAssertNotNil(window.rootViewController?.view.window)
+        replies.deliver()
+        try await waitUntil { !app.library.isLoading }
+        XCTAssertEqual(app.library.entries.map(\.id), ["1199"])
+        XCTAssertEqual(app.library.displayedLocation?.query, query)
+    }
+
     override func tearDown() {
         BrowseHTTPProtocol.handler = nil
         super.tearDown()

@@ -1436,10 +1436,10 @@ final class AppModelObservationTests: XCTestCase {
         let changed = expectation(description: "Root model forwards child state changes")
         let cancellable = model.objectWillChange.prefix(1).sink { changed.fulfill() }
 
-        model.library.query = "invented query"
+        model.library.sort = .recent
 
         await fulfillment(of: [changed], timeout: 1)
-        XCTAssertEqual(model.library.query, "invented query")
+        XCTAssertEqual(model.library.sort, .recent)
         withExtendedLifetime(cancellable) {}
     }
 }
