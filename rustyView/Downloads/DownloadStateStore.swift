@@ -136,6 +136,8 @@ final class DownloadStateStore: @unchecked Sendable {
     }
 
     private func write(_ snapshot: DownloadStorageSnapshot) throws {
+        let trace = DownloadPerformanceTrace.begin("Download State Write")
+        defer { DownloadPerformanceTrace.end("Download State Write", trace) }
         try validateRoot()
         try fileManager.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
         var root = rootDirectory

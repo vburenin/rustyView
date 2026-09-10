@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import CryptoKit
+import UIKit
 
 @MainActor
 final class DownloadManager: ObservableObject {
@@ -36,6 +37,11 @@ final class DownloadManager: ObservableObject {
     private var operationNumber = 0
     private var storageIsReadable = true
     private var poller: Task<Void, Never>?
+    private var pollerID: UUID?
+    private var pollerDeadline: Date?
+    private var nextOptionalRequest = Date.distantPast
+    private var isApplicationInForeground = true
+    private var activityObservers: [NSObjectProtocol] = []
     private var inventoryTask: Task<Void, Never>?
     private var pollSchedule: [UUID: DownloadPollSchedule] = [:]
     private var finalMediaLengths: [UUID: Int64] = [:]
@@ -69,6 +75,13 @@ final class DownloadManager: ObservableObject {
             self?.reconnectBackgroundSession(identifier)
         }
         if sessionConfiguration == nil {
+            setApplicationInForeground(UIApplication.shared.applicationState != .background)
+            for (name, foreground) in [(UIApplication.didEnterBackgroundNotification, false),
+                                       (UIApplication.willEnterForegroundNotification, true)] {
+                activityObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor in self?.setApplicationInForeground(foreground) }
+                })
+            }
             let monitor = NWPathMonitor()
             network = monitor
             monitor.pathUpdateHandler = { [weak self] path in
@@ -91,6 +104,7 @@ final class DownloadManager: ObservableObject {
     }
 
     func configure(connection: ServerConnection?, statusClient: RustyDLNAClient? = nil) {
+        stopPoller()
         self.connection = connection
         self.statusClient = (try? statusClient?.ownedConnection()) ?? connection.map { owner in
             let client = RustyDLNAClient(configuration: .ephemeral)
@@ -101,6 +115,18 @@ final class DownloadManager: ObservableObject {
         pollSchedule.removeAll()
         startBackgroundOwnership()
         enqueueOperation { [weak self] in try await self?.schedule() }
+    }
+
+    /// Optional status and UI progress do not keep doing work after the app
+    /// leaves the foreground. URLSession retains transfer and completion ownership.
+    func setApplicationInForeground(_ foreground: Bool) {
+        if isApplicationInForeground != foreground {
+            if foreground { DownloadPerformanceTrace.event("Downloads Foreground") }
+            else { DownloadPerformanceTrace.event("Downloads Background") }
+        }
+        isApplicationInForeground = foreground
+        delegate.progressDelivery.setEnabled(foreground)
+        ensurePoller()
     }
 
     func recoverStorageIndex() {
@@ -201,6 +227,7 @@ final class DownloadManager: ObservableObject {
     func updateNetworkPath(available: Bool, cellular: Bool) {
         networkAvailable = available
         networkIsCellular = cellular
+        ensurePoller()
         enqueueOperation { [weak self] in try await self?.schedule() }
     }
 
@@ -273,10 +300,12 @@ final class DownloadManager: ObservableObject {
         // Stop network delivery immediately, even when another movie is being
         // inspected ahead of the durable pause operation.
         suspendTransfers(entry)
+        DownloadPerformanceTrace.event("Download Pause Requested")
         setVisiblePhase(download.id, .pausing)
+        ensurePoller()
         enqueueOperation { [weak self] in
             guard let self else { return }
-            defer { self.pendingPauses.remove(entry.id); self.publish() }
+            defer { self.pendingPauses.remove(entry.id); self.publish(); self.ensurePoller() }
             do { try await self.pauseJob(entry.id, userInitiated: true) }
             catch {
                 // A rejected durable pause must not strand a suspended task.
@@ -354,13 +383,15 @@ final class DownloadManager: ObservableObject {
         // Acknowledge the tap and stop receiving immediately. Keep tasks owned
         // until the tombstone commits so a storage error can restore the row.
         suspendTransfers(entry)
+        DownloadPerformanceTrace.event("Download Cancel Requested")
         publish()
+        ensurePoller()
         // Cancellation may overtake media inspection. The actor rechecks its
         // durable tombstone after inspection returns; the UI never waits for it.
         let previous = pending
         let cancellation = Task { [weak self] in
             guard let self else { return }
-            defer { self.pendingCancellations.remove(download.id); self.publish() }
+            defer { self.pendingCancellations.remove(download.id); self.publish(); self.ensurePoller() }
             await self.startup?.value
             if self.provisional[download.id] != nil { await previous?.value }
             do {
@@ -432,7 +463,7 @@ final class DownloadManager: ObservableObject {
             }
             return
         }
-        guard envelope.kind == .media else { return }
+        guard envelope.kind == .media, isApplicationInForeground else { return }
         guard active.first(where: { $0.id == entry.id })?.phase != .finishing else { return }
         let expected = expected ?? finalMediaLengths[resource.transferID].flatMap { $0 >= received ? $0 : nil }
         setVisiblePhase(entry.id, .downloading(progress: expected.map { min(1, Double(received) / Double($0)) } ?? 0,
@@ -931,12 +962,17 @@ final class DownloadManager: ObservableObject {
         }.sorted { (entry($0.id)?.enqueuedAt ?? .distantPast) < (entry($1.id)?.enqueuedAt ?? .distantPast) }
         let live = Set(active.map(\.id))
         preparationProgress = preparationProgress.filter { live.contains($0.key) }
+        pollSchedule = pollSchedule.filter { live.contains($0.key) }
         let transfers = Set(journal.filter { live.contains($0.id) }.flatMap { $0.resources ?? [] }.map(\.transferID))
         finalMediaLengths = finalMediaLengths.filter { transfers.contains($0.key) }
     }
     private func setVisiblePhase(_ id: UUID, _ phase: DownloadPhase) {
         if let index = active.firstIndex(where: { $0.id == id }) {
-            active[index].phase = pendingCancellations.contains(id) ? .cancelling : pendingPauses.contains(id) ? .pausing : phase
+            let next = pendingCancellations.contains(id) ? .cancelling : pendingPauses.contains(id) ? .pausing : phase
+            if active[index].phase != next {
+                if case .downloading = next { DownloadPerformanceTrace.event("Download UI Progress") }
+                active[index].phase = next
+            }
         }
     }
 
@@ -965,38 +1001,68 @@ final class DownloadManager: ObservableObject {
         enqueueOperation { [weak self] in self?.apply(try await self?.storage.snapshot() ?? DownloadStorageSnapshot()) }
     }
 
+    private func stopPoller() {
+        poller?.cancel()
+        poller = nil
+        pollerID = nil
+        pollerDeadline = nil
+    }
+
+    private func pollingEntries() -> [DownloadQueueEntry] {
+        guard isApplicationInForeground, let client = statusClient, networkAvailable,
+              allowsCellularDownloads || !networkIsCellular else { return [] }
+        return journal.filter { $0.metadata.kind == .compatible && !$0.state.isTerminal
+            && ![.failed, .paused, .pausing].contains($0.state)
+            && !pendingPauses.contains($0.id) && !pendingCancellations.contains($0.id)
+            && DownloadOwnership.matches($0.metadata, connection: client.connection)
+            && $0.resources?.contains(where: { $0.resource.kind == .media && $0.state == .running
+                && tasks[$0.transferID]?.state == .running }) == true
+            && pollState(for: $0).needsWork }
+    }
+
+    private func nextPollDate(for entry: DownloadQueueEntry) -> Date {
+        let scheduled = entry.resources?.first { $0.resource.kind == .media }?.scheduledAt ?? .distantPast
+        return max(pollState(for: entry).next, scheduled)
+    }
+
     private func ensurePoller() {
-        guard journal.contains(where: { $0.metadata.kind == .compatible && !$0.state.isTerminal
-            && $0.resources?.contains(where: { $0.resource.kind == .media && $0.state == .running }) == true }) else {
-            poller?.cancel()
-            poller = nil
-            return
+        guard let next = pollingEntries().map({ nextPollDate(for: $0) }).min() else { stopPoller(); return }
+        let deadline = max(next, nextOptionalRequest)
+        if poller != nil {
+            guard let planned = pollerDeadline else { return }
+            if deadline >= planned { return }
         }
-        guard poller == nil else { return }
+        stopPoller()
+        let id = UUID()
+        pollerID = id
+        pollerDeadline = deadline
         poller = Task { [weak self] in
-            while !Task.isCancelled {
-                guard self != nil else { return }
-                await self?.pollOne()
-                do { try await Task.sleep(for: .seconds(1)) } catch { return }
-            }
+            do { try await Task.sleep(for: .seconds(max(0, deadline.timeIntervalSinceNow)), tolerance: .milliseconds(100)) }
+            catch { return }
+            guard !Task.isCancelled, let self, self.pollerID == id else { return }
+            self.pollerDeadline = nil
+            self.nextOptionalRequest = Date().addingTimeInterval(1)
+            await self.pollOne()
+            guard !Task.isCancelled, self.pollerID == id else { return }
+            self.poller = nil
+            self.pollerID = nil
+            self.ensurePoller()
         }
     }
+
     private func pollOne() async {
-        guard let client = statusClient, networkAvailable, allowsCellularDownloads || !networkIsCellular else { return }
+        guard let client = statusClient else { return }
         let now = Date()
-        guard let entry = journal.filter({ $0.metadata.kind == .compatible && !$0.state.isTerminal
-            && ![.failed, .paused].contains($0.state) && DownloadOwnership.matches($0.metadata, connection: client.connection)
-            && $0.resources?.contains(where: { $0.resource.kind == .media && $0.state == .running
-                && tasks[$0.transferID]?.state == .running
-                && $0.scheduledAt.map({ $0 <= now }) != false }) == true })
-            .filter({ pollState(for: $0).next <= now && (!pollState(for: $0).unsupported || pollState(for: $0).fetchFinalSize) })
-            .min(by: { pollState(for: $0).next < pollState(for: $1).next }),
+        guard let entry = pollingEntries().filter({ nextPollDate(for: $0) <= now })
+            .min(by: { nextPollDate(for: $0) < nextPollDate(for: $1) }),
               let path = entry.metadata.serverPath,
               let resource = entry.resources?.first(where: { $0.resource.kind == .media && $0.state == .running }),
               let mediaTask = tasks[resource.transferID], mediaTask.state == .running else { return }
         let envelope = DownloadTaskEnvelope(metadata: entry.metadata, resource: resource)
         var schedule = pollState(for: entry)
         if schedule.fetchFinalSize {
+            let trace = DownloadPerformanceTrace.begin("Download Final Size Request")
+            defer { DownloadPerformanceTrace.end("Download Final Size Request", trace) }
             schedule.lengthAttempts = min(3, schedule.lengthAttempts + 1)
             let length: Int64?
             var sizeEndpointUnavailable = false
@@ -1014,6 +1080,7 @@ final class DownloadManager: ObservableObject {
                 if case .downloading(_, let bytes, _) = row.phase { received = bytes } else { received = 0 }
                 if length >= received {
                     finalMediaLengths[resource.transferID] = length
+                    schedule.preparationComplete = true
                     if let preparation = preparationProgress[entry.id] {
                         preparationProgress[entry.id] = DownloadPreparationProgress(
                             producedSeconds: preparation.producedSeconds, durationSeconds: entry.metadata.durationSeconds, isComplete: true)
@@ -1030,6 +1097,8 @@ final class DownloadManager: ObservableObject {
             return
         }
         do {
+            let trace = DownloadPerformanceTrace.begin("Download Preparation Status")
+            defer { DownloadPerformanceTrace.end("Download Preparation Status", trace) }
             let status = try await client.transcodeStatus(mediaID: entry.metadata.mediaID, compatiblePath: path)
             guard !Task.isCancelled, tasks[resource.transferID] === mediaTask, mediaTask.state == .running,
                   let current = owned(envelope), current.1.state == .running,
@@ -1038,11 +1107,12 @@ final class DownloadManager: ObservableObject {
             if let produced,
                let progress = DownloadPreparationProgress(producedSeconds: produced, durationSeconds: entry.metadata.durationSeconds,
                                                          isComplete: status.state == "ready") {
-                preparationProgress[entry.id] = progress
+                if preparationProgress[entry.id] != progress { preparationProgress[entry.id] = progress }
             } else if status.state == "ready" {
-                preparationProgress.removeValue(forKey: entry.id)
+                if preparationProgress[entry.id] != nil { preparationProgress.removeValue(forKey: entry.id) }
             }
             schedule.succeeded(retryHint: status.retryAfterSeconds)
+            schedule.preparationComplete = status.state == "ready"
             if status.state == "ready", schedule.lengthAttempts < 3, finalMediaLengths[resource.transferID] == nil,
                DownloadProgressValues.expectedByteCount(reported: mediaTask.countOfBytesExpectedToReceive,
                                                         response: mediaTask.response) == nil {
@@ -1081,7 +1151,10 @@ final class DownloadManager: ObservableObject {
             }
         }
     }
-    deinit { poller?.cancel(); inventoryTask?.cancel(); network?.cancel() }
+    deinit {
+        poller?.cancel(); inventoryTask?.cancel(); network?.cancel()
+        for observer in activityObservers { NotificationCenter.default.removeObserver(observer) }
+    }
 }
 
 private struct DownloadPollSchedule {
@@ -1092,6 +1165,8 @@ private struct DownloadPollSchedule {
     var fetchFinalSize = false
     var lengthAttempts = 0
     var sizeOnly = false
+    var preparationComplete = false
+    var needsWork: Bool { fetchFinalSize || (!unsupported && !preparationComplete) }
     mutating func succeeded(retryHint: UInt64?) {
         failures = 0
         next = Date().addingTimeInterval(max(3, min(60, Double(retryHint ?? 3))))

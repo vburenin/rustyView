@@ -172,6 +172,16 @@ cohesive product rather than independent demos.
   current delivery immediately and retain their pending UI state across late
   progress callbacks; cancellation remains visible until its durable tombstone
   commits, with storage failures restoring the actionable transfer.
+  Native progress caches the attempt-owned envelope and coalesces before the
+  main-actor hop to at most four UI updates per second per transfer, including
+  a trailing quiet-connection update. Background delivery retains current bytes
+  without publishing invisible UI progress. Optional polling is foreground-only,
+  ends at preparation completion, and sleeps to actual retry/status deadlines
+  without a recurring one-second wakeup. Resume polling after rejected pause or
+  cancel persistence as well as after foreground and network transitions.
+  Instruments phase markers separate progress, preparation/size requests,
+  verification, index writes, and inventory without logging media identifiers.
+  See `docs/ENERGY_DIAGNOSTICS.md` for measurement methods and limits.
   Cellular downloads are allowed by default; the persisted
   Settings choice can restrict current and future movie downloads to Wi-Fi.
   The rendition menu is the final download decision: selecting Compatible copy

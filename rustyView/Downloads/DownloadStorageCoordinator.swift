@@ -306,6 +306,8 @@ actor DownloadStorageCoordinator {
     }
 
     func inventory() throws -> [OfflineStorageInventoryItem] {
+        let trace = DownloadPerformanceTrace.begin("Download Storage Inventory")
+        defer { DownloadPerformanceTrace.end("Download Storage Inventory", trace) }
         let snapshot = try? disk.load()
         let referenced = Set(snapshot?.records.map { $0.packageDirectoryName ?? $0.fileName } ?? [])
         var result: [OfflineStorageInventoryItem] = try children(store.rootDirectory).compactMap { url in

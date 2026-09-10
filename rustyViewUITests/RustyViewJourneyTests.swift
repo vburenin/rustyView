@@ -2414,6 +2414,46 @@ final class RustyViewJourneyTests: XCTestCase {
         app.buttons["Cancel Download"].tap()
     }
 
+    func testBackgroundDownloadStopsOptionalPollingAndCatchesUpOnForeground() throws {
+        let fixture = try XCTUnwrap(server)
+        fixture.controlCompatibleTransfer()
+        let app = try launchApp()
+        let movie = app.staticTexts["The Clockwork Orchard"]
+        XCTAssertTrue(movie.waitForExistence(timeout: 8))
+        movie.tap()
+        let download = app.buttons["Download"]
+        XCTAssertTrue(download.waitForExistence(timeout: 5))
+        reveal(download, in: app)
+        download.tap()
+        app.buttons["Compatible copy"].tap()
+        XCTAssertTrue(app.staticTexts["detail-preparation-progress-42001"].waitForExistence(timeout: 6))
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 5) || app.state == .runningBackgroundSuspended)
+        let count = fixture.transcodeStatusRequestCount
+        let noInvisibleRequests = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fixture.transcodeStatusRequestCount > count
+        }, object: nil)
+        noInvisibleRequests.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [noInvisibleRequests], timeout: 4), .completed,
+                       "A real background transition must stop optional preparation requests")
+        fixture.finishCompatiblePreparation()
+        app.activate()
+        let bytes = app.staticTexts["detail-download-bytes-42001"]
+        let currentSize = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            bytes.exists && bytes.label.contains(" of \(fixture.controlledTotalText)")
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [currentSize], timeout: 8), .completed)
+        XCTAssertEqual(fixture.controlledTransferRequests, 1, "Foreground catch-up must retain the original background transfer")
+        let cancel = app.buttons["Cancel Download"]
+        reveal(cancel, in: app)
+        cancel.tap()
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 5))
+        let cancelled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fixture.validTranscodeCancellationCount == 1
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [cancelled], timeout: 4), .completed)
+    }
+
     func testCompatibleDownloadShowsTimestampBasedPreparationProgress() throws {
         let app = try launchApp()
         let title = app.staticTexts["The Clockwork Orchard"]

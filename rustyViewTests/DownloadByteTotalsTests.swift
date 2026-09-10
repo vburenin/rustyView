@@ -1,11 +1,132 @@
 import Foundation
 import Network
 import Combine
+import SwiftUI
 import XCTest
 @testable import rustyView
 
 @MainActor
 final class DownloadByteTotalsTests: XCTestCase {
+    func testRenderedDownloadProgressProfile() async throws {
+        let fixture = try ByteTotalsFixture(paddingBytes: 24 * 1_024 * 1_024)
+        addTeardownBlock { await fixture.cleanUp() }
+        let namespace = "energy-rendering-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        let app = AppModel(settings: AppSettings(defaults: defaults, secrets: KeychainStore(service: namespace)),
+            downloads: fixture.manager,
+            movieCache: MovieMetadataCache(directory: fixture.root.appendingPathComponent("metadata")),
+            userLibrary: UserLibraryStore(directory: fixture.root.appendingPathComponent("library"),
+                                         legacyProgressStore: PlaybackProgressStore(defaults: defaults)),
+            playbackPreferences: PlaybackPreferences(defaults: defaults))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UIHostingController(rootView: NavigationStack { DownloadsView().environmentObject(app) })
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; previous?.makeKeyAndVisible() }
+        try await fixture.start()
+        try await eventually("The rendered download has received its first media prefix") {
+            guard case .downloading(_, let received, _) = fixture.manager.active.first?.phase else { return false }
+            return received >= Int64(fixture.payload.count / 3)
+        }
+        try await Task.sleep(for: .milliseconds(500))
+        // A profiling-only hold lets Instruments attach to this isolated test
+        // host before the measured burst. Normal regression runs never wait.
+        if ProcessInfo.processInfo.environment["RUSTYVIEW_ENERGY_TRACE_HOLD"] == "1" {
+            try await Task.sleep(for: .seconds(12))
+        }
+        var publications = 0
+        let observation = app.objectWillChange.sink { _ in publications += 1 }
+        defer { observation.cancel() }
+        var before = rusage()
+        getrusage(RUSAGE_SELF, &before)
+        fixture.http.sendProgressBurst()
+        try await Task.sleep(for: .seconds(2.5))
+        var after = rusage()
+        getrusage(RUSAGE_SELF, &after)
+        let cpu = Double(after.ru_utime.tv_sec + after.ru_stime.tv_sec - before.ru_utime.tv_sec - before.ru_stime.tv_sec)
+            + Double(after.ru_utime.tv_usec + after.ru_stime.tv_usec - before.ru_utime.tv_usec - before.ru_stime.tv_usec) / 1_000_000
+        print("DOWNLOAD_ENERGY_PROFILE rendered_burst publications=\(publications) process_cpu_seconds=\(cpu)")
+        XCTAssertNotNil(window.rootViewController?.view.window)
+        guard case .downloading(_, let received, _) = fixture.manager.active.first?.phase else { return XCTFail("Missing rendered transfer") }
+        XCTAssertGreaterThan(received, Int64(fixture.payload.count * 3 / 5))
+    }
+
+    func testCompletedPreparationStopsStatusRequestsWhileBytesAreStillDownloading() async throws {
+        let fixture = try ByteTotalsFixture()
+        addTeardownBlock { await fixture.cleanUp() }
+        fixture.http.setReady()
+        try await fixture.start()
+        try await eventually("The finalized output size is learned") {
+            guard case .downloading(_, _, let expected) = fixture.manager.active.first?.phase else { return false }
+            return expected == Int64(fixture.payload.count)
+        }
+        let requests = fixture.http.requests(method: "GET").filter { $0.target.hasPrefix("/api/web/transcode/") }.count
+        try await Task.sleep(for: .seconds(7))
+        XCTAssertEqual(fixture.http.requests(method: "GET").filter { $0.target.hasPrefix("/api/web/transcode/") }.count,
+                       requests, "Preparation is terminal; continued transfer must not repeatedly poll it")
+        XCTAssertEqual(fixture.http.requests(method: "HEAD").count, 1)
+        XCTAssertFalse(fixture.manager.active.isEmpty)
+    }
+
+    func testNativeProgressBurstHasBoundedUIWorkAndKeepsAdvancing() async throws {
+        let fixture = try ByteTotalsFixture(paddingBytes: 24 * 1_024 * 1_024)
+        addTeardownBlock { await fixture.cleanUp() }
+        try await fixture.start()
+        try await eventually("The first real media prefix has reached URLSession") {
+            guard case .downloading(_, let received, _) = fixture.manager.active.first?.phase else { return false }
+            return received >= Int64(fixture.payload.count / 3)
+        }
+        var publications = 0
+        let observation = fixture.manager.$active.dropFirst().sink { _ in publications += 1 }
+        defer { observation.cancel() }
+        var before = rusage()
+        getrusage(RUSAGE_SELF, &before)
+        fixture.http.sendProgressBurst()
+        try await Task.sleep(for: .seconds(2.5))
+        var after = rusage()
+        getrusage(RUSAGE_SELF, &after)
+        let cpu = Double(after.ru_utime.tv_sec + after.ru_stime.tv_sec - before.ru_utime.tv_sec - before.ru_stime.tv_sec)
+            + Double(after.ru_utime.tv_usec + after.ru_stime.tv_usec - before.ru_utime.tv_usec - before.ru_stime.tv_usec) / 1_000_000
+        print("DOWNLOAD_ENERGY_PROFILE native_burst publications=\(publications) process_cpu_seconds=\(cpu)")
+        XCTAssertGreaterThan(publications, 0)
+        XCTAssertLessThanOrEqual(publications, 12, "Progress should update at most four times a second, including a final trailing update")
+        guard case .downloading(_, let received, _) = fixture.manager.active.first?.phase else {
+            return XCTFail("The held transfer must remain active")
+        }
+        // URLSession may retain a partial native write buffer while the tail
+        // is held. Assert substantial real advancement, not server-sent bytes.
+        XCTAssertGreaterThan(received, Int64(fixture.payload.count * 3 / 5))
+    }
+
+    func testBackgroundDownloadKeepsTransferButSuspendsOptionalProgressWork() async throws {
+        let fixture = try ByteTotalsFixture(paddingBytes: 24 * 1_024 * 1_024)
+        addTeardownBlock { await fixture.cleanUp() }
+        try await fixture.start()
+        try await eventually("Both native bytes and preparation status are available") {
+            guard case .downloading(_, let received, _) = fixture.manager.active.first?.phase else { return false }
+            return received >= Int64(fixture.payload.count / 3) && !fixture.manager.preparationProgress.isEmpty
+        }
+        fixture.manager.setApplicationInForeground(false)
+        let statusRequests = fixture.http.requests(method: "GET").filter { $0.target.hasPrefix("/api/web/transcode/") }.count
+        var publications = 0
+        let observation = fixture.manager.$active.dropFirst().sink { _ in publications += 1 }
+        defer { observation.cancel() }
+        fixture.http.sendProgressBurst()
+        try await Task.sleep(for: .seconds(3.5))
+        XCTAssertEqual(publications, 0, "Background file delivery must not schedule invisible UI progress")
+        XCTAssertEqual(fixture.http.requests(method: "GET").filter { $0.target.hasPrefix("/api/web/transcode/") }.count, statusRequests)
+        fixture.http.setReady()
+        fixture.manager.setApplicationInForeground(true)
+        try await eventually("Foreground restores current bytes and discovers the completed size") {
+            guard case .downloading(_, let received, let expected) = fixture.manager.active.first?.phase else { return false }
+            return received > Int64(fixture.payload.count * 3 / 5) && expected == Int64(fixture.payload.count)
+        }
+        XCTAssertEqual(fixture.http.requests(method: "GET").filter { $0.target.hasPrefix("/web/media/") }.count, 1,
+                       "The existing transfer must keep receiving bytes through the lifecycle change")
+    }
+
     func testTwoRenditionsOfOneMovieKeepTheirPreparationStatusSeparate() async throws {
         let fixture = try ByteTotalsFixture(requestScopedStatus: true)
         addTeardownBlock { await fixture.cleanUp() }
@@ -102,6 +223,11 @@ final class DownloadByteTotalsTests: XCTestCase {
             try await eventually("More real bytes arrive after the storage error") {
                 guard case .downloading(_, let received, _) = fixture.manager.active.first?.phase else { return false }
                 return received > Int64(fixture.payload.count / 3)
+            }
+            fixture.http.setReady()
+            try await eventually("A rejected pause or cancellation must also resume optional preparation updates") {
+                guard case .downloading(_, _, let expected) = fixture.manager.active.first?.phase else { return false }
+                return expected == Int64(fixture.payload.count)
             }
             XCTAssertEqual(fixture.http.requests(method: "GET").filter { $0.target.hasPrefix("/web/media/") }.count, 1)
             fixture.manager.cancel(try XCTUnwrap(fixture.manager.active.first))
@@ -320,11 +446,19 @@ private final class ByteTotalsFixture {
 
     init(headBehavior: ByteTotalsHTTP.HeadBehavior = .valid, producingSeconds: Double = 60,
          readySeconds: Double? = 59.5, fileManager: FileManager = .default,
-         growingRangeOnResume: Bool = false, statusUnavailable: Bool = false, requestScopedStatus: Bool = false) throws {
+         growingRangeOnResume: Bool = false, statusUnavailable: Bool = false, requestScopedStatus: Bool = false,
+         paddingBytes: Int = 0) throws {
         // Large enough to cross URLSession's native file-write buffering before
         // the next chunk; every byte belongs to a real generated MP4 fixture.
         let url = try XCTUnwrap(Bundle(for: DownloadByteTotalsTests.self).url(forResource: "synthetic-native-tracks", withExtension: "mp4"))
-        payload = try Data(contentsOf: url)
+        var data = try Data(contentsOf: url)
+        if paddingBytes > 0 {
+            var size = UInt32(paddingBytes + 8).bigEndian
+            withUnsafeBytes(of: &size) { data.append(contentsOf: $0) }
+            data.append(Data("free".utf8))
+            data.append(Data(count: paddingBytes))
+        }
+        payload = data
         http = try ByteTotalsHTTP(payload: payload, headBehavior: headBehavior,
                                  producingSeconds: producingSeconds, readySeconds: readySeconds,
                                  growingRangeOnResume: growingRangeOnResume, statusUnavailable: statusUnavailable,
@@ -446,6 +580,20 @@ private final class ByteTotalsHTTP: @unchecked Sendable {
             let next = chunkEnd + (payload.count - chunkEnd) / 2
             sendChunk(payload.subdata(in: chunkEnd..<next), to: media)
             chunkEnd = next
+        }
+    }
+    func sendProgressBurst() {
+        queue.async { [self] in
+            let start = chunkEnd
+            let end = payload.count * 2 / 3
+            for index in 1...60 {
+                queue.asyncAfter(deadline: .now() + Double(index) * 0.025) { [self] in
+                    guard let media else { return }
+                    let next = start + (end - start) * index / 60
+                    sendChunk(payload.subdata(in: chunkEnd..<next), to: media)
+                    chunkEnd = next
+                }
+            }
         }
     }
     func finishMedia() {

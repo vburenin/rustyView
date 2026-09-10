@@ -4,6 +4,20 @@ import XCTest
 
 @MainActor
 final class DownloadPollingTests: XCTestCase {
+    func testFutureRetryDeadlineStartsPollingWithoutARecurringWakeupLoop() async throws {
+        let fixture = try PollingFixture(count: 1, startDelay: 1.5) { _, request in
+            .response(status: 200, body: PollingHTTP.status(for: request))
+        }
+        addTeardownBlock { await fixture.cleanUp() }
+        await fixture.start()
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertTrue(fixture.http.statusRequests.isEmpty, "A retained retry deadline also delays optional status work")
+        try await eventually("The deadline itself must start polling, without another user or network event", timeout: 3) {
+            fixture.manager.preparationProgress.count == 1
+        }
+        XCTAssertEqual(fixture.http.mediaRequestCount, 1)
+    }
+
     func testCompatibleJobsShareOneStatusRequestCadenceAndKeepTheirRequestOwner() async throws {
         let fixture = try PollingFixture(count: 4) { _, request in
             .response(status: 200, body: PollingHTTP.status(for: request), delay: 0.2)
@@ -134,7 +148,7 @@ private final class PollingFixture {
     var mediaIDs: [String] { entries.map(\.metadata.mediaID) }
     var authorization: String { "Basic " + Data("poll-viewer:synthetic-poll-secret".utf8).base64EncodedString() }
 
-    init(count: Int, response: @escaping (Int, URLRequest) -> PollingHTTP.Reply) throws {
+    init(count: Int, startDelay: TimeInterval = 0, response: @escaping (Int, URLRequest) -> PollingHTTP.Reply) throws {
         let namespace = UUID().uuidString.lowercased()
         root = FileManager.default.temporaryDirectory.appendingPathComponent("polling-tests-\(namespace)")
         var address = URLComponents()
@@ -150,6 +164,7 @@ private final class PollingFixture {
                 retryAttempt: 0, attemptID: UUID(), accountUsername: capturedOwner.username)
             var entry = DownloadQueueEntry(metadata: metadata)
             entry.enqueuedAt = Date(timeIntervalSince1970: Double(100 + index))
+            if startDelay > 0 { entry.scheduledAt = Date().addingTimeInterval(startDelay) }
             return entry
         }
         try DownloadQueueStore(rootDirectory: root).save(DownloadQueueJournal(entries: entries))

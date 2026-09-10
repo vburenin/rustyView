@@ -142,6 +142,9 @@ remaining. Pause and cancel acknowledge the tap immediately while saving progres
 or removing the transfer. Once the movie is
 marked **Ready to Watch**, play it from that tab or tap **Watch Offline** on its detail
 page—even in airplane mode.
+Progress updates are coalesced to reduce rendering work, and optional preparation
+polling stops when it is finished or the app is in the background. For battery
+reports and measurement instructions, see [Energy diagnostics](docs/ENERGY_DIAGNOSTICS.md).
 Each movie appears once. If you keep both original and compatible versions,
 open its actions menu and choose **Manage Copies** to play or delete a specific copy.
 Your offline movies remain accessible after forgetting the server connection.

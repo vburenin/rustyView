@@ -37,6 +37,8 @@ enum DownloadAssetInspector {
     /// itself uses asynchronous APIs and never needs the main actor.
     static func inspect(_ url: URL, fileExtension: String? = nil) -> DownloadAssetInspection {
         guard url.isFileURL else { return .unsupported }
+        let trace = DownloadPerformanceTrace.begin("Download File Verification")
+        defer { DownloadPerformanceTrace.end("Download File Verification", trace) }
         let result = InspectionResult()
         let signal = DispatchSemaphore(value: 0)
         let work = Task.detached(priority: .utility) {
@@ -113,6 +115,9 @@ enum DownloadAssetInspector {
         settings: [String: Any]?,
         range: CMTimeRange?
     ) -> Bool {
+        let phase: StaticString = settings == nil ? "Verify Compressed Samples" : "Verify Decoded Samples"
+        let trace = DownloadPerformanceTrace.begin(phase)
+        defer { DownloadPerformanceTrace.end(phase, trace) }
         guard !Task.isCancelled, let reader = try? AVAssetReader(asset: asset) else { return false }
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
         output.alwaysCopiesSampleData = false

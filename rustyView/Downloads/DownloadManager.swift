@@ -14,6 +14,8 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate {
     private var discardedAttempts: Set<DownloadAttemptIdentity> = []
     private var installedRecords: [Int: DownloadRecord] = [:]
     private var installedMetadata: [Int: DownloadTaskMetadata] = [:]
+    private var progressEnvelopes: [ObjectIdentifier: (String?, DownloadTaskEnvelope)] = [:]
+    let progressDelivery = DownloadProgressDelivery()
 
     init(store: DownloadManifestStore, queueStore: DownloadQueueStore? = nil,
          coordinator: DownloadStorageCoordinator? = nil) {
@@ -128,12 +130,24 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate {
     ) {
         guard let response = downloadTask.response as? HTTPURLResponse,
               (200..<300).contains(response.statusCode) else { return }
-        if let envelope = DownloadTaskEnvelope.decode(downloadTask.taskDescription), coordinator != nil {
+        if coordinator != nil, let envelope = progressEnvelope(for: downloadTask) {
             if envelope.kind == .media, DownloadResponseValidator.failure(for: response) != nil { return }
-            Task { @MainActor [weak owner] in
-                owner?.resourceProgress(envelope, received: totalBytesWritten,
-                                        expected: DownloadProgressValues.expectedByteCount(
-                                            reported: totalBytesExpectedToWrite, response: downloadTask.response))
+            let expected = DownloadProgressValues.expectedByteCount(reported: totalBytesExpectedToWrite, response: response)
+            if envelope.kind != .media {
+                let limit = (envelope.kind == .artwork ? 20 : 5) * 1_024 * 1_024
+                // Resource size enforcement is never delayed or disabled in
+                // the background. Other sidecar progress has no visible row.
+                if totalBytesWritten > limit {
+                    Task { @MainActor [weak owner] in
+                        owner?.resourceProgress(envelope, received: totalBytesWritten, expected: expected)
+                    }
+                }
+            } else {
+                progressDelivery.submit(.init(envelope: envelope, received: totalBytesWritten, expected: expected)) { [weak owner] sample in
+                    Task { @MainActor [weak owner] in
+                        owner?.resourceProgress(sample.envelope, received: sample.received, expected: sample.expected)
+                    }
+                }
             }
             return
         }
@@ -157,6 +171,8 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate {
         downloadTask: URLSessionDownloadTask,
         didFinishDownloadingTo location: URL
     ) {
+        retireProgress(for: downloadTask)
+        DownloadPerformanceTrace.event("Download File Received")
         if let coordinator {
             guard let envelope = DownloadTaskEnvelope.decode(downloadTask.taskDescription) else { downloadTask.cancel(); return }
             processing.enter()
@@ -253,6 +269,7 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate {
         task: URLSessionTask,
         didCompleteWithError error: Error?
     ) {
+        retireProgress(for: task)
         guard let error else { return }
         if coordinator != nil, let envelope = DownloadTaskEnvelope.decode(task.taskDescription) {
             processing.enter()
@@ -329,6 +346,23 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate {
 
     static func metadata(for task: URLSessionTask) -> DownloadTaskMetadata? {
         DownloadTaskEnvelope.decode(task.taskDescription)?.metadata
+    }
+
+    private func progressEnvelope(for task: URLSessionTask) -> DownloadTaskEnvelope? {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = ObjectIdentifier(task)
+        if let cached = progressEnvelopes[key], cached.0 == task.taskDescription { return cached.1 }
+        guard let envelope = DownloadTaskEnvelope.decode(task.taskDescription) else { return nil }
+        progressEnvelopes[key] = (task.taskDescription, envelope)
+        return envelope
+    }
+
+    private func retireProgress(for task: URLSessionTask) {
+        lock.lock()
+        let envelope = progressEnvelopes.removeValue(forKey: ObjectIdentifier(task))?.1
+        lock.unlock()
+        if let envelope { progressDelivery.remove(envelope.transferID) }
     }
 
     private func completeFailure(_ envelope: DownloadTaskEnvelope, message: String, retryable: Bool, failure: UserFacingError) {
