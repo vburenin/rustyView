@@ -96,7 +96,7 @@ struct UserFacingError: Error, Codable, Hashable, Identifiable, Sendable {
         if let storage = error as? DownloadStoreError {
             let category: Category
             switch storage {
-            case .invalidManifest, .missingTemporaryFile, .conflictingDownload: category = .storage
+            case .invalidManifest, .missingTemporaryFile, .conflictingDownload, .verificationTimedOut: category = .storage
             case .emptyDownload, .incompleteDownload, .incompatibleDownload, .invalidDownloadedFile: category = .invalidMedia
             }
             self.init(category: category, title: title, message: storage.localizedDescription)

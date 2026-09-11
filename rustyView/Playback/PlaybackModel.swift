@@ -167,6 +167,8 @@ final class PlaybackModel: ObservableObject {
     @Published private(set) var selectedAudioIndex: Int?
     @Published private(set) var selectedQuality = "auto"
     @Published private(set) var qualityNotice: String?
+    @Published private(set) var streamFormatNotice: String?
+    @Published private(set) var activeVideoOutput: String?
     @Published private(set) var qualityProfiles: [QualityProfile]?
     @Published private(set) var mode = PlaybackMode.automatic
     @Published private(set) var selectedCaptionIndex: Int?
@@ -189,6 +191,9 @@ final class PlaybackModel: ObservableObject {
     @Published private(set) var transport = PlaybackTransportState()
     @Published private(set) var preparationMessage = "Preparing video…"
     @Published var requestError: String?
+    @Published private(set) var progressSaveNotice: String?
+    @Published private(set) var isRetryingProgressSave = false
+    @Published private(set) var subtitlePreferenceNotice: String?
     @Published private(set) var isSavingStartOver = false
     @Published private(set) var isLoadingSavedPosition = false
 
@@ -218,6 +223,8 @@ final class PlaybackModel: ObservableObject {
     private var timeObserver: Any?
     private var timeObserverPlayer: AVPlayer?
     private var subtitleCues: [SubtitleCue] = []
+    private var subtitlePreferencePending = false
+    private var forceHDRTranscode = false
     private var streamOffset = 0.0
     private var lastProgressSave = 0.0
     private var activeServerOrigin: String?
@@ -329,6 +336,8 @@ final class PlaybackModel: ObservableObject {
             viewingSession = nil
             self.qualityNotice = qualityNotice
             self.qualityProfiles = qualityProfiles
+            forceHDRTranscode = false
+            streamFormatNotice = nil
         }
         localSource = nil
         mediaOutputPolicy = .localRelay
@@ -367,6 +376,8 @@ final class PlaybackModel: ObservableObject {
         hasEnded = false
         if !sameItem {
             clearSubtitleSelection()
+            subtitlePreferencePending = true
+            subtitlePreferenceNotice = nil
         }
 
         let savedPosition = activeLibraryKey.flatMap { activityStore.resumePosition(for: $0) }
@@ -394,14 +405,18 @@ final class PlaybackModel: ObservableObject {
             transport.attempt = attempt
             transport.phase = .preparing
             if attempt != .original {
+                activeVideoOutput = CompatibleOutputPlan(item: item, quality: quality, audioIndex: selectedAudioIndex,
+                    forceVideoTranscode: attempt == .portable || forceHDRTranscode, preserveHDR: attempt != .portable).videoOutput
                 path = viewingSession.prepare(
                     item: item,
                     quality: quality,
                     audioIndex: selectedAudioIndex,
                     startSeconds: Int(startPosition),
-                    forceVideoTranscode: attempt == .portable
+                    forceVideoTranscode: attempt == .portable || forceHDRTranscode,
+                    preserveHDR: attempt != .portable
                 )
             } else {
+                activeVideoOutput = nil
                 viewingSession.cancelActive()
                 path = item.sourceURL + (item.sourceURL.contains("?") ? "&" : "?") + "reason=native_ios"
             }
@@ -746,20 +761,34 @@ final class PlaybackModel: ObservableObject {
 
     var requiresSubtitleOutputAcknowledgement: Bool { subtitleSelection.requested?.delivery == .appOverlay }
 
-    func turnSubtitlesOff() { clearSubtitleSelection() }
+    func turnSubtitlesOff() {
+        subtitlePreferencePending = false
+        subtitlePreferenceNotice = nil
+        preferences.subtitleMode = .off
+        clearSubtitleSelection()
+    }
 
     func retrySubtitles() async {
         guard case .failed(let requested, _) = subtitleSelection else { return }
-        await selectSubtitle(id: requested.id)
+        await selectSubtitle(id: requested.id, rememberPreference: false)
     }
 
-    func selectSubtitle(id: String?) async {
-        guard let id else { clearSubtitleSelection(); return }
+    func selectSubtitle(id: String?, rememberPreference: Bool = true) async {
+        guard let id else {
+            if rememberPreference { turnSubtitlesOff() } else { clearSubtitleSelection() }
+            return
+        }
         guard let option = subtitleOptions.first(where: { $0.id == id }) else {
             if let requested = subtitleSelection.requested {
                 failSubtitle(requested, message: "This playback format does not include that subtitle. Choose an available subtitle or return to Original playback.")
             }
             return
+        }
+        if rememberPreference {
+            subtitlePreferencePending = false
+            subtitlePreferenceNotice = nil
+            preferences.subtitleMode = .always
+            preferences.preferredSubtitleLanguage = option.language
         }
         clearSubtitleSelection()
         let request = captionRequest
@@ -888,6 +917,8 @@ final class PlaybackModel: ObservableObject {
         localSource = (record, url, captionSources)
         qualityNotice = nil
         qualityProfiles = nil
+        activeVideoOutput = nil
+        streamFormatNotice = nil
         movieMetadata = record.movieMetadata
         chapters = record.movieMetadata.chapters
         pausedPlaybackFailure = nil
@@ -901,7 +932,11 @@ final class PlaybackModel: ObservableObject {
         activeAttempt = .original
         automaticFallbackEnabled = false
         isApplyingInitialSeek = false
-        if !retainingViewingID { clearSubtitleSelection() }
+        if !retainingViewingID {
+            clearSubtitleSelection()
+            subtitlePreferencePending = true
+            subtitlePreferenceNotice = nil
+        }
         selectedAudioIndex = nil
         currentSession = UUID()
         item = nil
@@ -1024,10 +1059,12 @@ final class PlaybackModel: ObservableObject {
                 LocalPlaybackTrack(id: $0.id.uuidString, title: $0.caption.label, language: $0.caption.language,
                                    isDefault: $0.caption.isDefault, isForced: $0.caption.isForced == true)
             }
-            self.isLoadingLocalTracks = false
-            if let requested = self.subtitleSelection.requested, requested.delivery == .native {
+            if self.subtitlePreferencePending {
+                self.subtitlePreferencePending = false
+                await self.applySubtitlePreference(playerItem)
+            } else if let requested = self.subtitleSelection.requested, requested.delivery == .native {
                 if self.subtitleOptions.contains(where: { $0.id == requested.id && $0.selection.label == requested.label }) {
-                    await self.selectSubtitle(id: requested.id)
+                    await self.selectSubtitle(id: requested.id, rememberPreference: false)
                 } else {
                     self.failSubtitle(requested, message: "This playback format does not include that subtitle. Choose another subtitle or return to Original playback.")
                 }
@@ -1036,6 +1073,7 @@ final class PlaybackModel: ObservableObject {
                 self.selectedLocalSubtitleID = selected.id
             }
             guard self.currentSession == session, !Task.isCancelled else { return }
+            self.isLoadingLocalTracks = false
             if self.chapters.isEmpty {
                 let groups = (try? await playerItem.asset.loadChapterMetadataGroups(bestMatchingPreferredLanguages: Locale.preferredLanguages)) ?? []
                 var loaded: [MovieChapter] = []
@@ -1052,6 +1090,39 @@ final class PlaybackModel: ObservableObject {
         }
     }
 
+    private func applySubtitlePreference(_ playerItem: AVPlayerItem) async {
+        guard preferences.subtitleMode != .off else { return }
+        let available = subtitleOptions.filter(\.isAvailable)
+        if preferences.subtitleMode == .automatic {
+            if let group = localLegibleGroup {
+                playerItem.selectMediaOptionAutomatically(in: group)
+                if let selected = playerItem.currentMediaSelection.selectedMediaOption(in: group),
+                   let id = nativeSubtitleOptions.first(where: { $0.value == selected })?.key {
+                    await selectSubtitle(id: id, rememberPreference: false)
+                    return
+                }
+            }
+            let defaultServer = item?.captions.first { $0.default && $0.isPlayableOnDevice }.map { "server-\($0.index)" }
+            let defaultLocal = localSource?.captions.first { $0.caption.isDefault || $0.caption.isForced == true }?.id.uuidString
+            if let id = defaultServer ?? defaultLocal { await selectSubtitle(id: id, rememberPreference: false) }
+            return
+        }
+        let languages = preferences.preferredSubtitleLanguage.map { [$0] }
+            ?? [preferences.preferredAudioLanguage].compactMap { $0 } + Locale.preferredLanguages
+        let options = available.sorted {
+            if $0.isForced != $1.isForced { return !$0.isForced }
+            return $0.selection.delivery == .native && $1.selection.delivery != .native
+        }
+        let preferred = languages.lazy.compactMap { language in
+            options.first { !$0.isForced && PlaybackLanguage.matches($0.language, language) }
+        }.first
+        if let choice = preferred ?? (preferences.preferredSubtitleLanguage == nil ? options.first : nil) {
+            await selectSubtitle(id: choice.id, rememberPreference: false)
+        } else {
+            subtitlePreferenceNotice = "Your preferred subtitles aren’t available in this movie. Choose another language in Subtitles."
+        }
+    }
+
     func stop() {
         preparingAssetTask?.cancel()
         preparingAssetTask = nil
@@ -1059,6 +1130,9 @@ final class PlaybackModel: ObservableObject {
         saveProgress()
         interruptionResume = nil
         systemPlaybackNotice = nil
+        progressSaveNotice = nil
+        subtitlePreferenceNotice = nil
+        subtitlePreferencePending = false
         clearSubtitleSelection()
         lastObservedPlaybackTime = nil
         viewingSession?.cancelActive()
@@ -1430,12 +1504,29 @@ final class PlaybackModel: ObservableObject {
             source: localSource.map { .offline(recordID: $0.record.id) } ?? .online, event: event)
         activityStore.record(activity)
         Task { [weak self, activityStore] in
-            do { try await activityStore.flush() }
+            do {
+                try await activityStore.flush()
+                guard let self, self.activityViewingID == activity.viewingID, self.isPresented else { return }
+                self.progressSaveNotice = nil
+            }
             catch {
-                guard let self, self.activityViewingID == activity.viewingID else { return }
-                self.requestError = "Your viewing progress could not be saved. \(error.localizedDescription)"
+                guard let self, self.activityViewingID == activity.viewingID, self.isPresented else { return }
+                let notice = "Viewing progress hasn’t been saved. You can keep watching and retry when storage is available."
+                if self.progressSaveNotice != notice { self.progressSaveNotice = notice }
             }
         }
+    }
+
+    func retrySavingProgress() async {
+        guard !isRetryingProgressSave else { return }
+        isRetryingProgressSave = true
+        let viewing = activityViewingID
+        defer { isRetryingProgressSave = false }
+        do {
+            try await activityStore.flush()
+            guard activityViewingID == viewing else { return }
+            progressSaveNotice = nil
+        } catch { /* Keep the existing nonblocking notice until storage recovers. */ }
     }
 
     private func observeActualAdvancement() {
@@ -1520,6 +1611,23 @@ final class PlaybackModel: ObservableObject {
             currentTime = position
             finishWithFailure(message)
             return
+        }
+        if automaticFallbackEnabled, activeAttempt == .compatible {
+            if activeVideoOutput == "hevc_hdr10" {
+                play(item, mode: .portable, quality: selectedQuality, audioIndex: selectedAudioIndex,
+                     startAt: position, continuingAutomaticFallback: true, retainingViewingSession: true,
+                     preservingIntent: retainedIntent)
+                streamFormatNotice = "HDR playback failed. Continuing in SDR at your selected quality."
+                return
+            }
+            if !forceHDRTranscode, item.preparedVideoOutputs?.contains("hevc_hdr10") == true {
+                forceHDRTranscode = true
+                play(item, mode: .compatible, quality: selectedQuality, audioIndex: selectedAudioIndex,
+                     startAt: position, continuingAutomaticFallback: true, retainingViewingSession: true,
+                     preservingIntent: retainedIntent)
+                preparationMessage = "Preparing HDR video…"
+                return
+            }
         }
         let action = PlaybackRouting.startupAction(
             after: activeAttempt,

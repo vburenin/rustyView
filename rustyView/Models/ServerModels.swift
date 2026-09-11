@@ -40,12 +40,18 @@ struct ServerCapabilities: Codable, Sendable {
     let transcoding: Bool
     let captions: Bool
     let qualityProfiles: [QualityProfile]
+    var nativeDownloads: Bool? = nil
+    var aiUpscale: AIUpscaleCapability? = nil
 
     enum CodingKeys: String, CodingKey {
         case transcoding, captions
         case qualityProfiles = "quality_profiles"
+        case nativeDownloads = "native_downloads"
+        case aiUpscale = "ai_upscale"
     }
 }
+
+struct AIUpscaleCapability: Codable, Sendable { var label: String? }
 
 struct QualityProfile: Codable, Identifiable, Hashable, Sendable {
     let id: String
@@ -54,6 +60,8 @@ struct QualityProfile: Codable, Identifiable, Hashable, Sendable {
     let maxHeight: Int
     let expectedBandwidthKbps: Int
     let automaticFallback: Bool
+    var maxVideoKbps: Int? = nil
+    var audioKbps: Int? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, label
@@ -61,6 +69,8 @@ struct QualityProfile: Codable, Identifiable, Hashable, Sendable {
         case maxHeight = "max_height"
         case expectedBandwidthKbps = "expected_bandwidth_kbps"
         case automaticFallback = "automatic_fallback"
+        case maxVideoKbps = "max_video_kbps"
+        case audioKbps = "audio_kbps"
     }
 }
 
@@ -187,6 +197,7 @@ struct MediaItem: Codable, Identifiable, Hashable, Sendable {
     let sourceURL: String
     let fallbackURL: String
     let transcodeLikely: Bool
+    var preparedVideoOutputs: [String]? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, title
@@ -213,6 +224,7 @@ struct MediaItem: Codable, Identifiable, Hashable, Sendable {
         case sourceURL = "source_url"
         case fallbackURL = "fallback_url"
         case transcodeLikely = "transcode_likely"
+        case preparedVideoOutputs = "prepared_video_outputs"
     }
 }
 

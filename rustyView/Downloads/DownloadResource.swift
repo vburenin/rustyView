@@ -33,6 +33,7 @@ struct DownloadResourceDescriptor: Codable, Hashable, Identifiable, Sendable {
     var expectedBytes: Int64?
     var reason: String?
     var failure: UserFacingError? = nil
+    var verificationPending: Bool? = nil
     var id: String { resource.runtimeID }
 
     init(resource: OfflineResource, transferID: UUID = UUID()) {

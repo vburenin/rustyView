@@ -96,15 +96,8 @@ final class RustyViewJourneyTests: XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: 8))
         title.tap()
         XCTAssertTrue(app.buttons["Download"].waitForExistence(timeout: 5))
-        app.buttons["Download"].tap()
-        let original = app.buttons["Original file"]
-        for _ in 0..<2 {
-            if original.isHittable { break }
-            app.swipeUp()
-        }
-        XCTAssertTrue(original.isHittable)
-        original.tap()
-        XCTAssertTrue(app.buttons["Cancel Download"].waitForExistence(timeout: 3))
+        downloadOriginal(in: app)
+        waitForDownloadFeedback(in: app)
         app.navigationBars.buttons.firstMatch.tap()
         app.buttons["Downloads"].firstMatch.tap()
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'play-download-'")).firstMatch.waitForExistence(timeout: 35))
@@ -397,6 +390,12 @@ final class RustyViewJourneyTests: XCTestCase {
         let settings = app.tabBars.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 10))
         dismissSyntheticPasswordOffer(in: app)
+        // XCTest's clipping audit mutates Dynamic Type and can retain stale
+        // nodes after restoring it. Relaunch at the requested size for each
+        // Settings screen, then prove the actual rendered font geometry.
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
         settings.tap()
         let edit = app.buttons["Edit Connection"]
         XCTAssertTrue(edit.waitForExistence(timeout: 5))
@@ -405,6 +404,9 @@ final class RustyViewJourneyTests: XCTestCase {
         let quality = app.buttons["preferred-quality"]
         AuditReveal(quality, in: app)
         AuditAssertTarget(quality, in: app)
+        let expectedLineHeight = UIFont.preferredFont(forTextStyle: .body,
+            compatibleWith: UITraitCollection(preferredContentSizeCategory: category)).lineHeight
+        XCTAssertGreaterThanOrEqual(quality.staticTexts["Quality"].firstMatch.frame.height + 2, expectedLineHeight)
         try AuditVisibleScreen(app, appearance: appearance, name: "settings-playback", fontName: category.rawValue)
         AuditReveal(quality, in: app)
         quality.tap()
@@ -412,10 +414,17 @@ final class RustyViewJourneyTests: XCTestCase {
         XCTAssertTrue(fullHD.waitForExistence(timeout: 3))
         AuditAssertTarget(fullHD, in: app)
         fullHD.tap()
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.tap()
+        AuditDownloadSettingsText(in: app, category: category)
         let network = app.buttons["download-network-menu"]
         AuditReveal(network, in: app)
         AuditAssertTarget(network, in: app)
-        try AuditVisibleScreen(app, appearance: appearance, name: "settings-download-network", fontName: category.rawValue)
+        XCTAssertGreaterThanOrEqual(network.staticTexts["Network"].firstMatch.frame.height + 2, expectedLineHeight)
+        try AuditVisibleScreen(app, appearance: appearance, name: "settings-download-network",
+                               fontName: category.rawValue, predictClipping: false)
         AuditReveal(network, in: app)
         network.tap()
         let wifi = app.buttons["Wi-Fi Only"]
@@ -455,7 +464,8 @@ final class RustyViewJourneyTests: XCTestCase {
     }
 
     @MainActor
-    private func AuditVisibleScreen(_ app: XCUIApplication, appearance: String, name: String, fontName: String = "XXXL") throws {
+    private func AuditVisibleScreen(_ app: XCUIApplication, appearance: String, name: String,
+                                    fontName: String = "XXXL", predictClipping: Bool = true) throws {
         let screenshot = app.screenshot()
         let attachment = XCTAttachment(screenshot: screenshot)
         attachment.name = "Audit-\(name)-\(appearance)-\(fontName)"
@@ -486,8 +496,60 @@ final class RustyViewJourneyTests: XCTestCase {
         // OCR-based element detection also recognizes native scroll-edge text
         // behind the bars. Audit readable content and named actions here; the
         // original accessibility smoke test retains the broader detection pass.
+        // Inspect the current rendering before the clipping audit cycles font
+        // sizes. Combining them lets XCTest inspect stale list-cell pixels.
         AuditScreen(app, types: [.contrast, .hitRegion,
-            .sufficientElementDescription, .textClipped, .trait])
+            .sufficientElementDescription, .trait])
+        if predictClipping { AuditScreen(app, types: [.textClipped]) }
+    }
+
+    @MainActor
+    private func AuditDownloadSettingsText(in app: XCUIApplication, category: UIContentSizeCategory) {
+        // The iOS 26.5 predictive clipping audit reports these Settings cells
+        // without an element during font cycling, even with native
+        // LabeledContent. Check every download label/value at the actual launch
+        // size instead. Truncation, a one-line cap or a squeezed column fails
+        // these measured bounds; contrast and actionable semantics stay audited.
+        let traits = UITraitCollection(preferredContentSizeCategory: category)
+        func checkText(_ text: XCUIElement, style: UIFont.TextStyle, inside container: XCUIElement) {
+            XCTAssertTrue(text.exists)
+            let frame = text.frame
+            let font = UIFont.preferredFont(forTextStyle: style, compatibleWith: traits)
+            let expected = (text.label as NSString).boundingRect(
+                with: CGSize(width: frame.width, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font], context: nil)
+            XCTAssertGreaterThan(frame.width, 0)
+            XCTAssertGreaterThanOrEqual(frame.height + 3, ceil(expected.height),
+                                       "The complete Settings text must fit at \(category.rawValue): \(text.label)")
+            XCTAssertTrue(AuditContains(frame, in: container.frame))
+            XCTAssertTrue(AuditContains(frame, in: AuditContentBounds(app)))
+            XCTAssertTrue(AuditMeasuredLabelContrast(text), "Rendered Settings text must meet 4.5:1 contrast")
+        }
+        for id in ["preferred-download-quality", "preferred-download-audio", "download-network-menu"] {
+            let control = app.buttons[id]
+            AuditReveal(control, in: app)
+            AuditAssertTarget(control, in: app)
+            let labels = control.staticTexts.allElementsBoundByIndex
+            XCTAssertEqual(labels.count, 2, "A setting exposes its full title and selected value")
+            for label in labels { checkText(label, style: .body, inside: control) }
+            if labels.count == 2 {
+                XCTAssertFalse(labels[0].frame.insetBy(dx: 1, dy: 1).intersects(labels[1].frame.insetBy(dx: 1, dy: 1)),
+                               "The setting title and value must never overlap")
+            }
+        }
+        let notes = [
+            "Downloads keep this resolution and video bitrate or lower. Smaller movies are never enlarged. Streaming quality is set separately.",
+            "Supported audio keeps its original channels. HDR and additional audio tracks require server support; each download shows what will be included.",
+        ]
+        for note in notes {
+            let text = app.staticTexts.matching(NSPredicate(format: "label == %@", note)).firstMatch
+            AuditReveal(text, in: app)
+            checkText(text, style: .footnote, inside: app)
+        }
+        let hdr = app.switches["preserve-download-hdr"].firstMatch
+        AuditReveal(hdr, in: app)
+        AuditAssertTarget(hdr, in: app)
+        checkText(hdr.staticTexts["Preserve HDR"].firstMatch, style: .body, inside: hdr)
     }
 
     private func AuditScreen(_ app: XCUIApplication, types: XCUIAccessibilityAuditType) {
@@ -718,7 +780,8 @@ final class RustyViewJourneyTests: XCTestCase {
     @MainActor
     private func AuditDismissSetupKeyboard(in app: XCUIApplication) {
         for _ in 0..<3 {
-            guard app.keyboards.firstMatch.exists else { return }
+            let keyboard = app.keyboards.firstMatch
+            guard keyboard.exists, keyboard.frame.intersects(app.frame) else { return }
             let bounds = AuditContentBounds(app)
             let origin = app.coordinate(withNormalizedOffset: .zero)
             let x = app.frame.width * 0.75
@@ -727,7 +790,13 @@ final class RustyViewJourneyTests: XCTestCase {
                        thenDragTo: origin.withOffset(CGVector(dx: x, dy: app.frame.height - 20)),
                        withVelocity: .slow, thenHoldForDuration: 0.2)
         }
-        XCTAssertFalse(app.keyboards.firstMatch.exists,
+        // UIKit can retain the dismissed keyboard below the window in its tree.
+        // Require unobstructed content, whether or not that offscreen node exists.
+        let hidden = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            let keyboard = app.keyboards.firstMatch
+            return !keyboard.exists || !keyboard.frame.intersects(app.frame)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 3), .completed,
                        "Scrolling setup must dismiss the keyboard so all instructions can be read")
     }
 
@@ -872,7 +941,9 @@ final class RustyViewJourneyTests: XCTestCase {
         AuditReveal(app.buttons["play-pause-control"], in: app)
         AuditAssertTarget(app.buttons["play-pause-control"], in: app)
         app.buttons["play-pause-control"].tap()
-        _ = try waitForElapsedSeconds(in: timeline, atLeast: 3, timeout: 5, revealingControlsIn: app)
+        // The full fault sequence leaves a network asset paused for over a
+        // minute. Cover bounded reconnect/recovery and require real advancement.
+        _ = try waitForElapsedSeconds(in: timeline, atLeast: 3, timeout: 15, revealingControlsIn: app)
         if includePlayerFailure {
             try recoverPlayerErrorForFont(app, fixture: server, name: name)
         }
@@ -964,7 +1035,9 @@ final class RustyViewJourneyTests: XCTestCase {
         quality.tap()
         app.buttons["1080p · 8 Mbps"].tap()
         XCTAssertEqual(mode.value as? String, "Compatible", "An explicit quality must visibly correct Original before Apply")
-        app.buttons["Apply Streaming Changes"].tap()
+        let apply = app.buttons["Apply Streaming Changes"]
+        reveal(apply, in: app)
+        apply.tap()
         XCTAssertTrue(app.buttons["Play"].waitForExistence(timeout: 2), "Apply must preserve a deliberate pause")
         app.buttons["Play"].tap()
         _ = try waitForElapsedSeconds(in: timeline, atLeast: 4, timeout: 12, revealingControlsIn: app)
@@ -1003,6 +1076,102 @@ final class RustyViewJourneyTests: XCTestCase {
                       "Cancelling a draft must preserve the explanation of the active quality")
     }
 
+    func testMyMoviesMakesFavoritesHistoryAndDirectResumeDiscoverableAndSearchable() throws {
+        try XCTUnwrap(server).useOfflineTracksFixture()
+        let app = try launchApp()
+        let title = app.staticTexts["The Clockwork Orchard"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 8))
+        title.tap()
+        XCTAssertTrue(app.buttons["detail-actions"].waitForExistence(timeout: 5))
+        app.buttons["detail-actions"].tap()
+        app.buttons["detail-favorite"].tap()
+        app.buttons["Watch"].tap()
+        let timeline = app.descendants(matching: .any).matching(identifier: "player-time-label").firstMatch
+        _ = try waitForElapsedSeconds(in: timeline, atLeast: 5, timeout: 12, revealingControlsIn: app)
+        showPlayerControls(in: app)
+        app.buttons["Pause"].tap()
+        let position = try elapsedSeconds(from: timeline)
+        app.buttons["Close player"].tap()
+        app.navigationBars.buttons.firstMatch.tap()
+        let directResume = app.buttons["resume-saved-42001"]
+        XCTAssertTrue(directResume.waitForExistence(timeout: 3), "Library must offer Resume directly")
+        app.buttons["My Movies"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["collection-favorites"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["collection-history"].isHittable)
+        XCTAssertTrue(directResume.isHittable)
+        XCTAssertGreaterThanOrEqual(directResume.frame.height, 44)
+        directResume.tap()
+        let resumed = try waitForElapsedSeconds(in: timeline, atLeast: position, timeout: 8, revealingControlsIn: app)
+        XCTAssertLessThan(resumed, position + 4)
+        showPlayerControls(in: app)
+        app.buttons["Pause"].tap()
+        app.buttons["Close player"].tap()
+        app.buttons["collection-favorites"].tap()
+        let search = app.searchFields["Search favorites"]
+        XCTAssertTrue(search.waitForExistence(timeout: 3))
+        search.tap()
+        search.typeText("missing lantern")
+        XCTAssertTrue(app.buttons["Clear Search"].waitForExistence(timeout: 3))
+        XCTAssertFalse(directResume.exists)
+        app.buttons["Clear Search"].tap()
+        XCTAssertTrue(directResume.waitForExistence(timeout: 3))
+        if app.buttons["Cancel"].exists { app.buttons["Cancel"].tap() }
+        app.navigationBars.buttons["BackButton"].tap()
+        app.buttons["collection-history"].tap()
+        XCTAssertEqual(app.buttons.matching(identifier: "resume-saved-42001").count, 1)
+        app.terminate()
+        app.launch()
+        app.buttons["My Movies"].firstMatch.tap()
+        XCTAssertTrue(directResume.waitForExistence(timeout: 5))
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = "My Movies with a real resumed viewing"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    func testDownloadUsesSavedMaximumAndSelectedAudioWithOneTap() throws {
+        let fixture = try XCTUnwrap(server)
+        fixture.useNativeDownloadContract()
+        let app = try launchApp()
+        XCTAssertTrue(app.staticTexts["The Clockwork Orchard"].waitForExistence(timeout: 8))
+        app.buttons["Settings"].firstMatch.tap()
+        let maximum = app.buttons["preferred-download-quality"]
+        reveal(maximum, in: app)
+        maximum.tap()
+        app.buttons["Source quality"].tap()
+        maximum.tap()
+        app.buttons.matching(NSPredicate(format: "label CONTAINS 'Up to 1080p'")).firstMatch.tap()
+        app.terminate()
+        app.launch()
+        app.buttons["Settings"].firstMatch.tap()
+        reveal(maximum, in: app)
+        XCTAssertTrue(maximum.label.contains("1080p") || (maximum.value as? String)?.contains("1080p") == true)
+        app.buttons["Library"].firstMatch.tap()
+        app.staticTexts["The Clockwork Orchard"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Quality"].waitForExistence(timeout: 5))
+        XCTAssertTrue((app.buttons["Quality"].value as? String)?.contains("Auto") == true)
+        app.buttons["Audio"].tap()
+        let french = app.buttons.matching(NSPredicate(format: "label CONTAINS 'French dub'")).firstMatch
+        XCTAssertTrue(french.waitForExistence(timeout: 3))
+        french.tap()
+        app.buttons["Download"].tap()
+        XCTAssertTrue(app.buttons["Cancel Download"].waitForExistence(timeout: 3))
+        let requested = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fixture.compatibleDownloadParameters.contains { parameters in
+                parameters["quality"] == "full_hd" && parameters["audio"] == "0"
+                    && parameters["download_audio"] == "selected"
+            }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [requested], timeout: 6), .completed,
+                       "One Download tap must reach HTTP with the saved cap and selected French audio")
+        XCTAssertEqual(fixture.originalDownloadRequestCount, 0)
+        let details = app.buttons["active-download-details"]
+        reveal(details, in: app)
+        details.tap()
+        XCTAssertEqual(app.staticTexts["active-download-quality"].label, "Quality: Compatible · 1080p · 8 Mbps")
+        app.buttons["Cancel Download"].tap()
+    }
+
     func testOfflineContinueWatchingStartOverFavoritesAndHistorySurviveRelaunch() throws {
         let server = try XCTUnwrap(server)
         server.useOfflineTracksFixture()
@@ -1019,11 +1188,8 @@ final class RustyViewJourneyTests: XCTestCase {
         app.buttons["detail-actions"].tap()
         XCTAssertEqual(favorite.label, "Remove from Favorites")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.2)).tap()
-        if !app.buttons["Download"].isHittable { app.swipeUp() }
-        app.buttons["Download"].tap()
-        app.swipeUp()
-        app.buttons["Original file"].tap()
-        XCTAssertTrue(app.buttons["Cancel Download"].waitForExistence(timeout: 3))
+        downloadOriginal(in: app)
+        waitForDownloadFeedback(in: app)
         app.navigationBars.buttons.firstMatch.tap()
         app.buttons["Downloads"].firstMatch.tap()
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'play-download-'")).firstMatch.waitForExistence(timeout: 35))
@@ -1177,13 +1343,7 @@ final class RustyViewJourneyTests: XCTestCase {
             XCTAssertTrue(card.waitForExistence(timeout: 8))
             reveal(card, in: app)
             card.tap()
-            let download = app.buttons["Download"]
-            XCTAssertTrue(download.waitForExistence(timeout: 5))
-            reveal(download, in: app)
-            download.tap()
-            let original = app.buttons["Original file"]
-            reveal(original, in: app)
-            original.tap()
+            downloadOriginal(in: app)
             app.navigationBars.buttons.firstMatch.tap()
         }
         app.buttons["Downloads"].firstMatch.tap()
@@ -1217,12 +1377,9 @@ final class RustyViewJourneyTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [loaded], timeout: 8), .completed)
         reveal(actions, in: app)
         actions.tap()
-        let another = app.buttons["Download Another Copy"]
+        let another = app.buttons["Download Using Preferences"]
         XCTAssertTrue(another.waitForExistence(timeout: 3))
         another.tap()
-        let compatibleChoice = app.buttons["Compatible copy"]
-        reveal(compatibleChoice, in: app)
-        compatibleChoice.tap()
         app.navigationBars.buttons.firstMatch.tap()
         let twoCopies = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH '2 copies'")).firstMatch
         XCTAssertTrue(twoCopies.waitForExistence(timeout: 25))
@@ -1436,15 +1593,39 @@ final class RustyViewJourneyTests: XCTestCase {
         add(screenshot)
     }
 
+    private func downloadOriginal(in app: XCUIApplication) {
+        let actions = app.buttons["detail-actions"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 5))
+        reveal(actions, in: app)
+        actions.tap()
+        let original = app.buttons["download-original"]
+        XCTAssertTrue(original.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'May not play'")).firstMatch.exists,
+                      "The original action must disclose playback limitations before downloading")
+        XCTAssertTrue(original.isHittable)
+        original.tap()
+    }
+
+    private func waitForDownloadFeedback(in app: XCUIApplication) {
+        // This fixture is delivered in two seconds. A completed saved copy is
+        // immediate feedback too, and can replace Cancel before XCTest polls.
+        let feedback = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            app.buttons["Cancel Download"].exists
+                || app.descendants(matching: .any).matching(identifier: "offline-copy-available").firstMatch.exists
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [feedback], timeout: 3), .completed)
+    }
+
     private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
         for attempt in 0..<8 {
-            if element.exists && element.frame.intersects(app.frame) && element.isHittable { break }
             let bounds = AuditContentBounds(app)
-            let down = element.exists ? element.frame.maxY < bounds.minY : (attempt / 3).isMultiple(of: 2) == false
+            if element.exists && AuditContains(element.frame, in: bounds) && element.isHittable { break }
+            let down = element.exists ? element.frame.minY < bounds.minY : (attempt / 3).isMultiple(of: 2) == false
             AuditScroll(in: app, bounds: bounds, down: down)
         }
         XCTAssertTrue(element.exists)
         XCTAssertTrue(element.isHittable)
+        XCTAssertTrue(AuditContains(element.frame, in: AuditContentBounds(app)), "The full target must be clear of navigation, tabs and the keyboard")
     }
 
     private func showPlayerControls(in app: XCUIApplication) {
@@ -1586,8 +1767,7 @@ final class RustyViewJourneyTests: XCTestCase {
         XCTAssertTrue(movie.waitForExistence(timeout: 8))
         movie.tap()
         XCTAssertTrue(app.buttons["Download"].waitForExistence(timeout: 4))
-        app.buttons["Download"].tap()
-        app.buttons["Original file"].tap()
+        downloadOriginal(in: app)
         app.navigationBars.buttons.firstMatch.tap()
         app.buttons["Downloads"].firstMatch.tap()
         var stored = app.staticTexts.matching(NSPredicate(format: "identifier == 'download-readiness-42001' AND label CONTAINS 'Compatible copy needed'")).firstMatch
@@ -1605,12 +1785,12 @@ final class RustyViewJourneyTests: XCTestCase {
         let onlineOptions = app.buttons["Online options"]
         XCTAssertTrue(onlineOptions.waitForExistence(timeout: 3))
         onlineOptions.tap()
-        let compatible = app.buttons["Download Compatible Copy"]
+        let compatible = app.buttons["Download"]
         XCTAssertTrue(compatible.waitForExistence(timeout: 5))
         compatible.tap()
         XCTAssertTrue(app.buttons["Cancel Download"].waitForExistence(timeout: 3),
                        "The final compatible-copy choice must create visible work immediately")
-        XCTAssertFalse(app.buttons["Download Compatible Copy"].exists)
+        XCTAssertFalse(app.buttons["Download"].exists)
         let enqueued = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             server.compatibleDownloadRequestCount == 1
         }, object: nil)
@@ -1660,12 +1840,8 @@ final class RustyViewJourneyTests: XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: 8))
         title.tap()
         XCTAssertTrue(app.buttons["Download"].waitForExistence(timeout: 5))
-        app.buttons["Download"].tap()
-        app.swipeUp()
-        XCTAssertTrue(app.descendants(matching: .any)["download-summary-original"].exists,
-                      "The original's included features and source-size meaning appear before its final action")
-        app.buttons["Original file"].tap()
-        XCTAssertTrue(app.buttons["Cancel Download"].waitForExistence(timeout: 3))
+        downloadOriginal(in: app)
+        waitForDownloadFeedback(in: app)
         app.navigationBars.buttons.firstMatch.tap()
         app.buttons["Downloads"].firstMatch.tap()
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'play-download-'")).firstMatch.waitForExistence(timeout: 35))
@@ -1886,6 +2062,9 @@ final class RustyViewJourneyTests: XCTestCase {
     }
 
     func testBrowseToMovieAndExposeEssentialViewingControls() throws {
+        // Keep this suspension journey's eight-second delivery independent of
+        // the saved quality; progress-focused journeys use the longer default.
+        try XCTUnwrap(server).setCompatibleDownloadDelay(8)
         XCUIDevice.shared.orientation = .portrait
         let app = try launchApp()
 
@@ -1913,7 +2092,7 @@ final class RustyViewJourneyTests: XCTestCase {
             XCTAssertTrue(control.isHittable, "Essential movie controls must be visible without scrolling")
         }
         XCTAssertTrue(app.staticTexts["3840x2160"].exists)
-        XCTAssertTrue(app.staticTexts["HDR10"].exists)
+        XCTAssertFalse(app.staticTexts["HDR10"].exists, "The SDR fixture must not be labeled HDR")
         XCTAssertTrue(app.staticTexts["About"].exists)
 
         XCUIDevice.shared.orientation = .landscapeLeft
@@ -2093,9 +2272,6 @@ final class RustyViewJourneyTests: XCTestCase {
         )
 
         app.buttons["Download"].tap()
-        XCTAssertTrue(app.buttons["Compatible copy"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.buttons["Original file"].exists)
-        app.buttons["Compatible copy"].tap()
 
         app.navigationBars.buttons.firstMatch.tap()
         app.buttons["Downloads"].firstMatch.tap()
@@ -2191,7 +2367,7 @@ final class RustyViewJourneyTests: XCTestCase {
         savedDetails.tap()
         XCTAssertEqual(
             app.staticTexts["active-download-quality"].label,
-            "Quality: Compatible · Auto · Best"
+            "Quality: Compatible · 1080p · 8 Mbps"
         )
         XCTAssertEqual(
             app.staticTexts["active-download-audio"].label,
@@ -2408,9 +2584,7 @@ final class RustyViewJourneyTests: XCTestCase {
         title.tap()
         XCTAssertTrue(app.buttons["Download"].waitForExistence(timeout: 5))
 
-        app.buttons["Download"].tap()
-        XCTAssertTrue(app.buttons["Original file"].waitForExistence(timeout: 2))
-        app.buttons["Original file"].tap()
+        downloadOriginal(in: app)
 
         XCTAssertTrue(
             app.buttons["Cancel Download"].waitForExistence(timeout: 3),
@@ -2452,7 +2626,6 @@ final class RustyViewJourneyTests: XCTestCase {
         XCTAssertTrue(download.waitForExistence(timeout: 5))
         reveal(download, in: app)
         download.tap()
-        app.buttons["Compatible copy"].tap()
         XCTAssertTrue(app.staticTexts["detail-preparation-progress-42001"].waitForExistence(timeout: 6))
         XCUIDevice.shared.press(.home)
         XCTAssertTrue(app.wait(for: .runningBackground, timeout: 5) || app.state == .runningBackgroundSuspended)
@@ -2498,8 +2671,6 @@ final class RustyViewJourneyTests: XCTestCase {
         XCTAssertTrue(fullHD.waitForExistence(timeout: 2))
         fullHD.tap()
         app.buttons["Download"].tap()
-        XCTAssertTrue(app.buttons["Compatible copy"].waitForExistence(timeout: 2))
-        app.buttons["Compatible copy"].tap()
 
         XCTAssertTrue(app.buttons["Cancel Download"].waitForExistence(timeout: 3))
         let downloadDetails = app.buttons["active-download-details"]
@@ -2564,7 +2735,6 @@ final class RustyViewJourneyTests: XCTestCase {
         XCTAssertTrue(download.waitForExistence(timeout: 5))
         reveal(download, in: app)
         download.tap()
-        app.buttons["Compatible copy"].tap()
         XCTAssertTrue(app.staticTexts["detail-download-bytes-42001"].waitForExistence(timeout: 8))
         app.navigationBars.buttons.firstMatch.tap()
         app.tabBars.buttons["Downloads"].tap()
@@ -2605,7 +2775,6 @@ final class RustyViewJourneyTests: XCTestCase {
         XCTAssertTrue(download.waitForExistence(timeout: 5))
         reveal(download, in: app)
         download.tap()
-        app.buttons["Compatible copy"].tap()
 
         let bytes = app.staticTexts["detail-download-bytes-42001"]
         XCTAssertTrue(bytes.waitForExistence(timeout: 8),
@@ -2978,14 +3147,20 @@ final class RustyViewJourneyTests: XCTestCase {
             let app = XCUIApplication()
             let frame = element.frame
             let identity = element.identifier.isEmpty ? element.label : element.identifier
-            if !identity.isEmpty, !AuditContains(frame, in: AuditContentBounds(app)),
-               app.cells.containing(element.elementType, identifier: identity).allElementsBoundByIndex.contains(where: {
-                   AuditContains(frame, in: $0.frame)
-               }) {
-                // Native lists scroll beneath translucent navigation/tab bars.
-                // Their obscured pixels are not the readable row presentation;
-                // visible rows and the bar's own controls remain audited.
-                return true
+            if !identity.isEmpty, !AuditContains(frame, in: AuditContentBounds(app)) {
+                // A predicate supports explanatory labels longer than XCTest's
+                // 128-character identifier-query limit.
+                let matching = NSPredicate(format: "identifier == %@ OR label == %@", identity, identity)
+                let scrollingContent = app.cells.containing(matching).allElementsBoundByIndex.contains {
+                    AuditContains(frame, in: $0.frame)
+                } || app.scrollViews.descendants(matching: element.elementType).matching(matching)
+                    .allElementsBoundByIndex.contains { AuditSameRect($0.frame, frame) }
+                if scrollingContent {
+                    // Native lists and detail scroll views extend beneath the bars.
+                    // Their obscured pixels are not the readable presentation;
+                    // visible content and the bar's own controls remain audited.
+                    return true
+                }
             }
         }
         if nativeSearchVerificationEnabled, issue.auditType == .hitRegion,
@@ -3056,11 +3231,26 @@ final class RustyViewJourneyTests: XCTestCase {
                 return true
             }
         }
+        if issue.auditType == .contrast, let label = issue.element, label.elementType == .staticText {
+            let app = XCUIApplication()
+            if app.navigationBars["Settings"].exists {
+                let belongsToDownloadSetting = ["preferred-download-quality", "preferred-download-audio", "download-network-menu"].contains { id in
+                    app.buttons[id].staticTexts.matching(NSPredicate(format: "label == %@", label.label))
+                        .allElementsBoundByIndex.contains { AuditSameRect($0.frame, label.frame) }
+                }
+                if belongsToDownloadSetting, AuditMeasuredLabelContrast(label) {
+                    return true // Exact owned text, measured again at the audit's current rendered size.
+                }
+            }
+        }
         if issue.auditType == .contrast, let label = issue.element,
-           (["media-file-size", "detail-title"].contains(label.identifier)
+           (["media-file-size", "detail-title", "detail-resolution"].contains(label.identifier)
             || (label.elementType == .staticText && XCUIApplication().navigationBars["Settings"].exists
                 && ["Saved copies", "Storage used", "App", "About"].contains(label.label))),
-           AuditMeasuredLabelContrast(label) {
+           // The resolution node includes the pill's decorative padding. Its
+           // rounded edge is not text ink; measure the actual padded text area.
+           AuditMeasuredLabelContrast(label, contentFrame: label.identifier == "detail-resolution"
+                ? label.frame.insetBy(dx: 9, dy: 5) : nil) {
             return true // These plain labels are checked from their actual rendered pixels.
         }
         if issue.auditType == .contrast,
@@ -3257,6 +3447,16 @@ private final class SyntheticHTTPServer {
     private var storedPreparedSegmentRequestCount = 0
     private var storedPortablePlaylistRequestCount = 0
     private var storedCompatibleDownloadRequestCount = 0
+    private var nativeDownloadContract = false
+    private var compatibleDownloadDelay: TimeInterval?
+    func setCompatibleDownloadDelay(_ delay: TimeInterval) { queue.sync { compatibleDownloadDelay = delay } }
+    private var storedCompatibleDownloadParameters: [[String: String]] = []
+    func useNativeDownloadContract() { queue.sync { nativeDownloadContract = true } }
+    var compatibleDownloadParameters: [[String: String]] {
+        countLock.lock()
+        defer { countLock.unlock() }
+        return storedCompatibleDownloadParameters
+    }
     private var storedOriginalDownloadRequestCount = 0
     private var storedTranscodeStatusRequestCount = 0
     private var storedValidTranscodeCancellationCount = 0
@@ -3742,6 +3942,13 @@ private final class SyntheticHTTPServer {
                 payload = Self.libraryJSON
             }
             var bytes = Data(payload.utf8)
+            if nativeDownloadContract,
+               var json = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+               var capabilities = json["capabilities"] as? [String: Any] {
+                capabilities["native_downloads"] = true
+                json["capabilities"] = capabilities
+                bytes = (try? JSONSerialization.data(withJSONObject: json)) ?? bytes
+            }
             if !fullHDQualityAvailable,
                var json = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
                var capabilities = json["capabilities"] as? [String: Any],
@@ -3849,6 +4056,8 @@ private final class SyntheticHTTPServer {
             countLock.lock()
             if target.contains("mode=compatible") {
                 storedCompatibleDownloadRequestCount += 1
+                let query = URLComponents(string: "http://127.0.0.1\(target)")?.queryItems ?? []
+                storedCompatibleDownloadParameters.append(query.reduce(into: [:]) { $0[$1.name] = $1.value })
                 shouldFailTransiently = target.contains("audio=0")
                     && storedCompatibleDownloadRequestCount == 1
             } else {
@@ -3874,7 +4083,7 @@ private final class SyntheticHTTPServer {
                 request: request,
                 method: method,
                 slowly: target.contains("mode=compatible"),
-                delay: target.contains("quality=full_hd") || target.contains("audio=1") ? 30 : 8,
+                delay: compatibleDownloadDelay ?? (target.contains("quality=full_hd") || target.contains("audio=1") ? 30 : 8),
                 connection: connection
             )
             return
@@ -4244,13 +4453,13 @@ private final class SyntheticHTTPServer {
     """#
 
     private static let mediaFields = #"""
-    "id":"42001","title":"The Clockwork Orchard 2160p HDR10 BDRemux","file_name":"synthetic-one.mkv",
+    "id":"42001","title":"The Clockwork Orchard 2160p BDRemux","file_name":"synthetic-one.mkv",
     "kind":"video","mime":"video/x-matroska","ext":"mkv","duration":"1:32:08",
     "duration_seconds":5528,"resolution":"3840x2160","width":3840,"height":2160,
     "about":"An entirely invented story used to verify the app interface.","plot":"Synthetic plot.",
     "genre":"Science Fiction","size_bytes":8200000000,"container":"matroska","video_codec":"hevc",
     "video_profile":"Main 10","bit_depth":10,"frame_rate":"24000/1001","video_repair_required":false,
-    "audio_codec":"dts,aac","audio_layout":"5.1","codec_string":"hvc1,mp4a.40.2","hdr":"hdr10",
+    "audio_codec":"dts,aac","audio_layout":"5.1","codec_string":"hvc1,mp4a.40.2","hdr":"sdr",
     "default_audio_index":1,"captions":[{"index":0,"label":"English","language":"eng","default":false,"source_format":"srt","browser_supported":true,"url":"/Captions/42001/0.vtt"}],"art_url":"/AlbumArt/42001.jpg","download_url":"/web/download/42001",
     "source_url":"/web/media/42001.mp4?mode=direct","fallback_url":"/web/media/42001.mp4","transcode_likely":false
     """#
@@ -4259,7 +4468,7 @@ private final class SyntheticHTTPServer {
     {"schema_version":2,"generation":1,"server_name":"Synthetic Media Server","root_folder_id":"0",
     "capabilities":{"transcoding":true,"captions":true,"quality_profiles":[
       {"id":"auto","label":"Auto · Best","max_width":3840,"max_height":2160,"expected_bandwidth_kbps":12000,"automatic_fallback":false},
-      {"id":"full_hd","label":"1080p · 8 Mbps","max_width":1920,"max_height":1080,"expected_bandwidth_kbps":8448,"automatic_fallback":false}
+      {"id":"full_hd","label":"1080p · 8 Mbps","max_width":1920,"max_height":1080,"max_video_kbps":8000,"audio_kbps":192,"expected_bandwidth_kbps":8448,"automatic_fallback":false}
     ]},"library_state":"ready","view":"library","folder":null,"breadcrumbs":[],"offset":0,"limit":60,
     "total":3,"has_more":false,"query":"","sort":"title","entries":[
       {"entry_type":"media",\(mediaFields)},
@@ -4272,7 +4481,7 @@ private final class SyntheticHTTPServer {
     {"schema_version":2,"generation":1,"server_name":"Synthetic Media Server","root_folder_id":"0",
     "capabilities":{"transcoding":true,"captions":true,"quality_profiles":[
       {"id":"auto","label":"Auto · Best","max_width":3840,"max_height":2160,"expected_bandwidth_kbps":12000,"automatic_fallback":false},
-      {"id":"full_hd","label":"1080p · 8 Mbps","max_width":1920,"max_height":1080,"expected_bandwidth_kbps":8448,"automatic_fallback":false}
+      {"id":"full_hd","label":"1080p · 8 Mbps","max_width":1920,"max_height":1080,"max_video_kbps":8000,"audio_kbps":192,"expected_bandwidth_kbps":8448,"automatic_fallback":false}
     ]},"library_state":"ready","view":"folders","folder":{"id":"0","title":"Media"},
     "breadcrumbs":[{"id":"0","title":"Media"}],"offset":0,"limit":60,"total":1,"has_more":false,
     "query":"","sort":"title","entries":[{"entry_type":"folder","id":"folder-7","title":"Invented Shelf","child_count":1}]}
@@ -4282,7 +4491,7 @@ private final class SyntheticHTTPServer {
     {"schema_version":2,"generation":1,"server_name":"Synthetic Media Server","root_folder_id":"0",
     "capabilities":{"transcoding":true,"captions":true,"quality_profiles":[
       {"id":"auto","label":"Auto · Best","max_width":3840,"max_height":2160,"expected_bandwidth_kbps":12000,"automatic_fallback":false},
-      {"id":"full_hd","label":"1080p · 8 Mbps","max_width":1920,"max_height":1080,"expected_bandwidth_kbps":8448,"automatic_fallback":false}
+      {"id":"full_hd","label":"1080p · 8 Mbps","max_width":1920,"max_height":1080,"max_video_kbps":8000,"audio_kbps":192,"expected_bandwidth_kbps":8448,"automatic_fallback":false}
     ]},"library_state":"ready","view":"folders","folder":{"id":"folder-7","title":"Invented Shelf"},
     "breadcrumbs":[{"id":"0","title":"Media"},{"id":"folder-7","title":"Invented Shelf"}],
     "offset":0,"limit":60,"total":1,"has_more":false,"query":"","sort":"title",
@@ -4392,15 +4601,7 @@ extension RustyViewJourneyTests {
         AuditReveal(download, in: app)
         AuditAssertTarget(download, in: app)
         try FontMatrixCapture(app, name: name, screen: "Details-actions")
-        AuditReveal(download, in: app)
-        download.tap()
-
-        let compatible = app.buttons["Compatible copy"]
-        XCTAssertTrue(compatible.waitForExistence(timeout: 3))
-        AuditReveal(compatible, in: app)
-        AuditAssertTarget(compatible, in: app)
-        try FontMatrixCapture(app, name: name, screen: "Download-choices-compatible")
-        let expand = app.buttons["Compatible format details"]
+        let expand = app.buttons["preferred-download-details"]
         AuditReveal(expand, in: app)
         AuditAssertTarget(expand, in: app)
         expand.tap()
@@ -4416,18 +4617,16 @@ extension RustyViewJourneyTests {
         try FontMatrixCapture(app, name: name, screen: "Download-format-expanded")
         AuditReveal(expand, in: app)
         expand.tap()
-        let original = app.buttons["Original file"]
-        AuditReveal(original, in: app)
-        AuditAssertTarget(original, in: app)
-        let originalDetails = app.buttons["Original format details"]
-        AuditReveal(originalDetails, in: app)
-        AuditAssertTarget(originalDetails, in: app)
-        XCTAssertTrue(AuditContains(original.frame, in: AuditContentBounds(app)))
-        try FontMatrixCapture(app, name: name, screen: "Download-choices-original")
-        let close = app.navigationBars["Download"].buttons["Close"]
-        AuditAssertTarget(close, in: app, content: false)
-        close.tap()
-        XCTAssertTrue(compatible.waitForNonExistence(timeout: 3))
+        let actions = app.buttons["detail-actions"]
+        AuditReveal(actions, in: app)
+        actions.tap()
+        let original = app.buttons["download-original"]
+        XCTAssertTrue(original.waitForExistence(timeout: 3))
+        AuditAssertNativeMenuTarget(original, in: app)
+        try FontMatrixCapture(app, name: name, screen: "Movie-actions-original-download")
+        // Dismiss without downloading; real transfer journeys exercise the action.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.15)).tap()
+        XCTAssertTrue(original.waitForNonExistence(timeout: 3))
         app.navigationBars.buttons.firstMatch.tap()
         let settings = app.tabBars.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 3))
@@ -4837,13 +5036,7 @@ extension RustyViewJourneyTests {
         XCTAssertTrue(card.waitForExistence(timeout: 8))
         reveal(card, in: app)
         card.tap()
-        let download = app.buttons["Download"]
-        XCTAssertTrue(download.waitForExistence(timeout: 5))
-        reveal(download, in: app)
-        download.tap()
-        let original = app.buttons["Original file"]
-        reveal(original, in: app)
-        original.tap()
+        downloadOriginal(in: app)
         app.navigationBars.buttons.firstMatch.tap()
         app.tabBars.buttons["Downloads"].tap()
         let sent = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -5036,14 +5229,10 @@ extension RustyViewJourneyTests {
         let actions = app.buttons["detail-actions"]
         reveal(actions, in: app)
         actions.tap()
-        let another = app.buttons["Download Another Copy"]
+        let another = app.buttons["Download Using Preferences"]
         XCTAssertTrue(another.waitForExistence(timeout: 3))
         AuditAssertNativeMenuTarget(another, in: app)
         another.tap()
-        let compatible = app.buttons["Compatible copy"]
-        reveal(compatible, in: app)
-        AuditAssertTarget(compatible, in: app)
-        compatible.tap()
         app.navigationBars.buttons.firstMatch.tap()
         let rowActions = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'download-actions-'")).firstMatch
         reveal(rowActions, in: app)

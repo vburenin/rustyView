@@ -147,9 +147,26 @@ actor DownloadStorageCoordinator {
         switch resource.resource.kind {
         case .media:
             if receipt.assetInspection == nil {
-                receipt.assetInspection = try await Task.detached(priority: .utility) { [store] in
-                    try store.inspectDownload(temporaryURL: payload, metadata: original.metadata, expectedByteCount: original.expectedByteCount)
-                }.value
+                do {
+                    receipt.assetInspection = try await Task.detached(priority: .utility) { [store] in
+                        try store.inspectDownload(temporaryURL: payload, metadata: original.metadata, expectedByteCount: original.expectedByteCount)
+                    }.value
+                } catch DownloadStoreError.verificationTimedOut {
+                    let issue = UserFacingError(DownloadStoreError.verificationTimedOut, title: "Verification needs another try")
+                    _ = try disk.update { snapshot in
+                        guard matchingEntry(original, in: snapshot) != nil,
+                              let index = snapshot.queue.firstIndex(where: { $0.id == original.metadata.recordID }),
+                              let component = snapshot.queue[index].resources?.firstIndex(where: { $0.id == original.resourceID }) else { return }
+                        snapshot.queue[index].resources?[component].state = .failed
+                        snapshot.queue[index].resources?[component].verificationPending = true
+                        snapshot.queue[index].resources?[component].reason = issue.message
+                        snapshot.queue[index].resources?[component].failure = issue
+                        snapshot.queue[index].state = .failed
+                        snapshot.queue[index].reason = issue.message
+                        snapshot.queue[index].failure = issue
+                    }
+                    throw DownloadStoreError.verificationTimedOut
+                }
             }
         case .caption:
             _ = try WebVTTParser.parse(Data(contentsOf: payload))
@@ -169,14 +186,34 @@ actor DownloadStorageCoordinator {
             snapshot.receipts.append(savedReceipt)
             if let componentIndex = snapshot.queue[index].resources?.firstIndex(where: { $0.id == savedReceipt.resourceID }) {
                 snapshot.queue[index].resources?[componentIndex].state = .delivered
+                snapshot.queue[index].resources?[componentIndex].verificationPending = nil
                 snapshot.queue[index].resources?[componentIndex].failure = nil
                 snapshot.queue[index].resources?[componentIndex].reason = nil
                 snapshot.queue[index].resources?[componentIndex].receivedBytes = size
                 snapshot.queue[index].resources?[componentIndex].expectedBytes = size
                 snapshot.queue[index].resources?[componentIndex].resumeReference = nil
             }
+            if resource.verificationPending == true,
+               snapshot.queue[index].resources?.contains(where: { $0.resource.required && $0.state == .failed }) != true {
+                snapshot.queue[index].state = .running
+                snapshot.queue[index].failure = nil
+                snapshot.queue[index].reason = nil
+            }
         }
         return try await finishAvailablePackage(recordID: receipt.metadata.recordID)
+    }
+
+    /// Verification retry uses the already owned receipt, with no credentials
+    /// and no new transfer identity. Cancellation still wins after inspection.
+    func retryVerification(recordID: UUID) async throws -> DownloadStorageSnapshot {
+        let snapshot = try disk.load()
+        guard let entry = snapshot.queue.first(where: { $0.id == recordID }), !entry.state.isTerminal,
+              let component = entry.resources?.first(where: { $0.verificationPending == true }) else { return snapshot }
+        guard let receipt = try ingress.pending().first(where: {
+            $0.metadata.recordID == recordID && $0.metadata.attemptID == entry.metadata.attemptID
+                && $0.resourceID == component.id && $0.transferID == component.transferID
+        }) else { throw DownloadStorageFailure.missingComponent }
+        return try await receive(receipt)
     }
 
     func finishAvailablePackage(recordID: UUID) async throws -> DownloadStorageSnapshot {
@@ -227,7 +264,7 @@ actor DownloadStorageCoordinator {
             audioTrackLabel: entry.metadata.audioTrackLabel, accountUsername: entry.metadata.accountUsername,
             assetInspection: inspection, movie: plan.movie, packageDirectoryName: destinationName,
             localCaptions: captions, packageStorageBytes: nil, installedAttemptID: entry.metadata.attemptID,
-            artworkFailure: artworkFailure
+            artworkFailure: artworkFailure, videoOutput: entry.metadata.videoOutput, downloadAudio: entry.metadata.downloadAudio
         )
         for _ in 0..<3 {
             try JSONEncoder().encode(record).write(to: stage.appendingPathComponent("record.json"), options: .atomic)
@@ -300,8 +337,8 @@ actor DownloadStorageCoordinator {
         return try disk.load()
     }
 
-    func revalidatePendingAssets() async throws -> DownloadStorageSnapshot {
-        _ = try await Task.detached(priority: .utility) { [store] in try store.revalidatePendingAssets() }.value
+    func revalidatePendingAssets(recordID: UUID? = nil) async throws -> DownloadStorageSnapshot {
+        _ = try await Task.detached(priority: .utility) { [store] in try store.revalidatePendingAssets(recordID: recordID) }.value
         return try disk.load()
     }
 
@@ -552,7 +589,8 @@ actor DownloadStorageCoordinator {
                              title: record.title, kind: record.kind, fileExtension: (record.fileName as NSString).pathExtension,
                              durationSeconds: record.durationSeconds, resolution: record.resolution,
                              attemptID: record.installedAttemptID, qualityID: record.qualityID,
-                             audioTrackIndex: record.audioTrackIndex, accountUsername: record.accountUsername, movie: record.movie)
+                             audioTrackIndex: record.audioTrackIndex, accountUsername: record.accountUsername, movie: record.movie,
+                             videoOutput: record.videoOutput, downloadAudio: record.downloadAudio)
     }
 
     private func children(_ url: URL) throws -> [URL] {

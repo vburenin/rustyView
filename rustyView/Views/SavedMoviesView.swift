@@ -1,10 +1,51 @@
 import SwiftUI
 
+struct MyMoviesView: View {
+    @EnvironmentObject private var app: AppModel
+    @State private var query = ""
+
+    var body: some View {
+        List {
+            if app.userLibrary.isRestoring {
+                ProgressView("Loading saved library…")
+            } else if query.isEmpty {
+                let continuing = app.savedEntries(.continueWatching)
+                if !continuing.isEmpty {
+                    Section("Continue Watching") {
+                        ForEach(continuing.prefix(3), id: \.key) { SavedMovieRow(entry: $0) }
+                        if continuing.count > 3 {
+                            NavigationLink("See All", destination: SavedMoviesView(collection: .continueWatching))
+                                .frame(minHeight: 44)
+                        }
+                    }
+                }
+                Section {
+                    SavedCollectionLinks()
+                }
+                if app.userLibrary.entries.isEmpty {
+                    Text("Your favorites and movies you watch appear here.")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                let matches = app.userLibrary.entries.values.filter { entry in
+                    entry.matchesSavedSearch(query)
+                }.sorted { $0.updatedAt > $1.updatedAt }
+                if matches.isEmpty { Text("No matching saved movies").foregroundStyle(.secondary) }
+                ForEach(matches, id: \.key) { SavedMovieRow(entry: $0) }
+            }
+        }
+        .navigationTitle("My Movies")
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search saved movies")
+        .safeAreaInset(edge: .bottom) { UserLibraryRecoveryView() }
+    }
+}
+
 struct SavedMoviesView: View {
     @EnvironmentObject private var app: AppModel
     @Environment(\.dismiss) private var dismiss
     let collection: SavedCollection
     var offlineOnly = false
+    @State private var query = ""
 
     var body: some View {
         Group {
@@ -19,12 +60,17 @@ struct SavedMoviesView: View {
             }
         }
         .navigationTitle(collection.title)
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search \(collection.title.lowercased())")
         .safeAreaInset(edge: .bottom) { UserLibraryRecoveryView() }
     }
 
-    private var entries: [UserLibraryEntry] { app.savedEntries(collection, offlineOnly: offlineOnly) }
+    private var entries: [UserLibraryEntry] {
+        app.savedEntries(collection, offlineOnly: offlineOnly).filter { $0.matchesSavedSearch(query) }
+    }
     private var history: [ViewingHistoryEntry] {
-        app.savedHistory(offlineOnly: offlineOnly)
+        app.savedHistory(offlineOnly: offlineOnly).filter {
+            query.isEmpty || $0.movie.matchesSavedSearch(query)
+        }
     }
     @ViewBuilder private var historyList: some View {
         if history.isEmpty { emptyCollection }
@@ -41,19 +87,32 @@ struct SavedMoviesView: View {
         ContentUnavailableView {
             Label(collection.title, systemImage: collection.icon)
         } description: {
-            Text(collection == .favorites ? "Add favorites from a movie’s actions menu."
+            Text(!query.isEmpty ? "No saved movies match your search."
+                 : collection == .favorites ? "Add favorites from a movie’s actions menu."
                  : collection == .history ? "Movies appear here when you start watching."
                  : "Movies you have started will be ready to resume here.")
         } actions: {
-            Button {
-                dismiss()
-                app.selectedTab = .library
-            } label: {
-                Text("Browse Movies").frame(minHeight: 44)
+            if !query.isEmpty {
+                SavedSearchReset(query: $query)
+            } else {
+                Button {
+                    dismiss()
+                    app.selectedTab = .library
+                } label: {
+                    Text("Browse Movies").frame(minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color("ActionFill"))
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Color("ActionFill"))
         }
+    }
+}
+
+private struct SavedSearchReset: View {
+    @Binding var query: String
+    @Environment(\.dismissSearch) private var dismissSearch
+    var body: some View {
+        Button("Clear Search") { query = ""; dismissSearch() }.frame(minHeight: 44)
     }
 }
 
@@ -78,8 +137,26 @@ struct ContinueWatchingPreview: View {
                 }
                 .accessibilityIdentifier("collection-continue")
                 .buttonStyle(.borderless)
+                if let latest = entries.first {
+                    SavedMovieRow(entry: latest)
+                        .padding(12)
+                        .background(.background, in: RoundedRectangle(cornerRadius: 14))
+                        .accessibilityIdentifier("continue-watching-preview")
+                }
             }
         }
+    }
+}
+
+private extension UserLibraryEntry {
+    func matchesSavedSearch(_ query: String) -> Bool {
+        query.isEmpty || movie?.matchesSavedSearch(query) == true
+    }
+}
+
+private extension MovieMetadata {
+    func matchesSavedSearch(_ query: String) -> Bool {
+        [displayTitle, summary ?? "", genre ?? ""].contains { $0.localizedStandardContains(query) }
     }
 }
 

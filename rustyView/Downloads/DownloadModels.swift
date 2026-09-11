@@ -37,10 +37,19 @@ struct DownloadRecord: Codable, Identifiable, Hashable, Sendable {
     var installedAttemptID: UUID? = nil
     var artworkFailure: String? = nil
     var packageIssue: String? = nil
+    var videoOutput: String? = nil
+    var downloadAudio: DownloadAudioSelection? = nil
 
     var movieMetadata: MovieMetadata {
-        movie ?? MovieMetadata(mediaID: mediaID, title: title,
+        var value = movie ?? MovieMetadata(mediaID: mediaID, title: title,
                                durationSeconds: durationSeconds.map(Double.init), resolution: resolution)
+        value.sourceSizeBytes = byteCount > 0 ? UInt64(byteCount) : nil
+        if let duration = assetInspection?.durationSeconds { value.durationSeconds = duration }
+        if let width = assetInspection?.width, let height = assetInspection?.height { value.resolution = "\(width)×\(height)" }
+        if let hdr = assetInspection?.containsHDRVideo {
+            value.hdr = hdr ? (videoOutput == "hevc_hdr10" ? "HDR10" : "HDR") : "SDR"
+        }
+        return value
     }
 
     var isReadyToWatch: Bool {
@@ -50,6 +59,7 @@ struct DownloadRecord: Codable, Identifiable, Hashable, Sendable {
     var readinessMessage: String {
         guard let assetInspection else { return "Stored · Checking playback compatibility" }
         if isReadyToWatch { return "Ready to Watch" }
+        if assetInspection.issue == .timedOut { return "Stored · Verification paused" }
         if assetInspection.integrity == .invalid { return "Stored · Video could not be verified" }
         return "Stored · Compatible copy needed"
     }
@@ -58,6 +68,7 @@ struct DownloadRecord: Codable, Identifiable, Hashable, Sendable {
         if let packageIssue { return packageIssue }
         guard let assetInspection else { return "The saved file will be checked on this device before it is ready to watch." }
         if isReadyToWatch { return nil }
+        if assetInspection.issue == .timedOut { return DownloadStoreError.verificationTimedOut.localizedDescription }
         if assetInspection.integrity == .invalid {
             return "The saved video could not be read completely. Download a new compatible copy to watch offline."
         }
@@ -73,7 +84,8 @@ struct DownloadRecord: Codable, Identifiable, Hashable, Sendable {
     }
 
     var audioSelectionDescription: String {
-        DownloadMetadataPresentation.audioSelection(
+        if let downloadAudio { return downloadAudio == .all ? "All audio tracks · compatible channels retained" : "\(audioTrackLabel ?? "Preferred audio") · compatible channels retained" }
+        return DownloadMetadataPresentation.audioSelection(
             kind: kind,
             trackIndex: audioTrackIndex,
             trackLabel: audioTrackLabel
@@ -100,6 +112,9 @@ struct DownloadTaskMetadata: Codable, Equatable, Sendable {
     var accountUsername: String? = nil
     var movie: MovieMetadata? = nil
 
+    var videoOutput: String? = nil
+    var downloadAudio: DownloadAudioSelection? = nil
+
     var videoQualityDescription: String {
         DownloadMetadataPresentation.videoQuality(
             kind: kind,
@@ -109,7 +124,8 @@ struct DownloadTaskMetadata: Codable, Equatable, Sendable {
     }
 
     var audioSelectionDescription: String {
-        DownloadMetadataPresentation.audioSelection(
+        if let downloadAudio { return downloadAudio == .all ? "All audio tracks · compatible channels retained" : "\(audioTrackLabel ?? "Preferred audio") · compatible channels retained" }
+        return DownloadMetadataPresentation.audioSelection(
             kind: kind,
             trackIndex: audioTrackIndex,
             trackLabel: audioTrackLabel

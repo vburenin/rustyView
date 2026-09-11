@@ -284,6 +284,12 @@ struct PlayerScreen: View {
                     .padding(.top, 8)
                     .accessibilityIdentifier("player-quality-notice")
             }
+            if let notice = app.player.streamFormatNotice {
+                Text(notice).font(.caption).fixedSize(horizontal: false, vertical: true)
+                    .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 8))
+                    .accessibilityIdentifier("player-format-notice")
+            }
             if let notice = app.player.systemPlaybackNotice {
                 Text(notice)
                     .font(.subheadline)
@@ -292,6 +298,22 @@ struct PlayerScreen: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 8))
                     .accessibilityIdentifier("player-system-notice")
+            }
+            if let notice = app.player.progressSaveNotice {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(notice).font(.caption).fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        Task { await app.player.retrySavingProgress() }
+                    } label: {
+                        Text(app.player.isRetryingProgressSave ? "Retrying…" : "Retry Saving Progress")
+                            .frame(minHeight: 44)
+                    }
+                    .disabled(app.player.isRetryingProgressSave)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityIdentifier("player-progress-save-notice")
             }
             if !compact { Spacer(minLength: 12) }
             centerControls

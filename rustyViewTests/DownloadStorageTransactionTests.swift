@@ -4,6 +4,76 @@ import XCTest
 @testable import rustyView
 
 final class DownloadStorageTransactionTests: XCTestCase {
+    func testStoredLegacyTimeoutCanRecheckItsOwnedBytesWithoutConnection() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileName = "synthetic-legacy-recheck.mp4"
+        let bytes = try OfflineMediaFixture.validData()
+        try bytes.write(to: root.appendingPathComponent(fileName))
+        let record = DownloadRecord(id: UUID(), serverOrigin: "https://media.example.test", mediaID: "42048",
+            title: "The Synthetic Observatory", kind: .original, fileName: fileName,
+            byteCount: Int64(bytes.count), completedAt: Date(), durationSeconds: 2,
+            resolution: "96x64", artworkPath: nil)
+        try JSONEncoder().encode(DownloadManifest(records: [record])).write(to: root.appendingPathComponent("manifest.json"))
+        let stalled = DownloadStorageCoordinator(store: DownloadManifestStore(rootDirectory: root, inspectionProgressTimeout: 0))
+        _ = try await stalled.restore()
+        let pending = try await stalled.revalidatePendingAssets()
+        XCTAssertEqual(pending.records.first?.assetInspection?.issue, .timedOut)
+        XCTAssertFalse(try XCTUnwrap(pending.records.first).isReadyToWatch)
+        let reopened = DownloadStorageCoordinator(store: DownloadManifestStore(rootDirectory: root))
+        let checked = try await reopened.revalidatePendingAssets(recordID: record.id)
+        XCTAssertTrue(try XCTUnwrap(checked.records.first).isReadyToWatch)
+        XCTAssertNil(checked.records.first?.accountUsername)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(fileName)), bytes)
+        XCTAssertTrue(checked.receipts.isEmpty)
+    }
+
+    func testVerificationTimeoutRetainsBytesAndReopenedStoreVerifiesWithoutAnotherTransfer() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let entry = entry()
+        let store = DownloadManifestStore(rootDirectory: root.appendingPathComponent("offline"), inspectionProgressTimeout: 0)
+        let coordinator = DownloadStorageCoordinator(store: store)
+        _ = try await coordinator.enqueue(entry)
+        do {
+            _ = try await deliver(.media, entry: entry, coordinator: coordinator, root: root)
+            XCTFail("An exhausted inspection budget must leave a retryable verification, not mark a file unsupported")
+        } catch DownloadStoreError.verificationTimedOut { }
+        let failed = try await coordinator.snapshot()
+        XCTAssertTrue(failed.records.isEmpty)
+        XCTAssertEqual(failed.queue.first?.resources?.first?.verificationPending, true)
+        XCTAssertEqual(failed.queue.first?.state, .failed)
+        let reopenedStore = DownloadManifestStore(rootDirectory: store.rootDirectory)
+        let reopened = DownloadStorageCoordinator(store: reopenedStore)
+        let recovered = try await reopened.retryVerification(recordID: entry.id)
+        let record = try XCTUnwrap(recovered.records.first)
+        XCTAssertTrue(record.isReadyToWatch)
+        XCTAssertEqual(recovered.queue.first?.state, .completed)
+        XCTAssertEqual(recovered.queue.first?.metadata.attemptID, entry.metadata.attemptID)
+        XCTAssertEqual(try Data(contentsOf: reopenedStore.localURL(for: record)), try OfflineMediaFixture.validData())
+        XCTAssertTrue(recovered.receipts.isEmpty)
+    }
+
+    func testCancelledVerificationCannotRestoreRetainedBytesAfterRelaunch() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let entry = entry()
+        let store = DownloadManifestStore(rootDirectory: root.appendingPathComponent("offline"), inspectionProgressTimeout: 0)
+        let coordinator = DownloadStorageCoordinator(store: store)
+        _ = try await coordinator.enqueue(entry)
+        do {
+            _ = try await deliver(.media, entry: entry, coordinator: coordinator, root: root)
+            XCTFail("Expected a stalled verification")
+        } catch DownloadStoreError.verificationTimedOut { }
+        _ = try await coordinator.cancel(recordID: entry.id)
+        let reopened = DownloadStorageCoordinator(store: DownloadManifestStore(rootDirectory: store.rootDirectory))
+        _ = try await reopened.retryVerification(recordID: entry.id)
+        let restored = try await reopened.restore()
+        XCTAssertTrue(restored.records.isEmpty)
+        XCTAssertTrue(restored.receipts.isEmpty)
+        XCTAssertEqual(restored.queue.first?.state, .cancelled)
+    }
+
     func testInstallRollsForwardAfterAbandoningEveryDurableMoveAndCommitBoundary() async throws {
         for boundary in [DownloadStorageBoundary.transactionWritten, .packageMoved, .indexCommitted] {
             let root = try temporaryRoot()

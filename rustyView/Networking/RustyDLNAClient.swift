@@ -298,12 +298,14 @@ final class RustyDLNAClient {
         audioIndex: Int? = nil,
         startSeconds: Int = 0,
         forceVideoTranscode: Bool = false,
-        preparedIdentity: PreparedPlaybackIdentity? = nil
+        preparedIdentity: PreparedPlaybackIdentity? = nil,
+        preserveHDR: Bool = true,
+        downloadAudio: DownloadAudioSelection? = nil
     ) -> String {
         // A non-Auto quality is a resolution/bitrate constraint. Copying the
         // source cannot satisfy that constraint, so it must use a video encode.
         let output = CompatibleOutputPlan(item: item, quality: quality, audioIndex: audioIndex,
-                                          forceVideoTranscode: forceVideoTranscode)
+                                          forceVideoTranscode: forceVideoTranscode, preserveHDR: preserveHDR)
         let video = output.videoMode
         var components = URLComponents(string: item.fallbackURL) ?? URLComponents()
         if delivery == "hls" {
@@ -322,6 +324,7 @@ final class RustyDLNAClient {
             URLQueryItem(name: "session", value: String(preparedIdentity?.session ?? requestID)),
         ]
         if let videoOutput = output.videoOutput { queryItems.append(URLQueryItem(name: "video_output", value: videoOutput)) }
+        if let downloadAudio { queryItems.append(URLQueryItem(name: "download_audio", value: downloadAudio.rawValue)) }
         if delivery != "mp4" { queryItems.append(URLQueryItem(name: "delivery", value: delivery)) }
         components.queryItems = queryItems
         return components.string ?? item.fallbackURL

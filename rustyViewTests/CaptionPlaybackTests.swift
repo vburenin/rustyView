@@ -189,9 +189,11 @@ final class CaptionTestHTTPServer: @unchecked Sendable {
     private var holdingMedia = false
     private var held: [NWConnection] = []
     private var captionRequests = 0
+    private var preparedMediaRequests: [String] = []
     private var startup: CheckedContinuation<String, Error>?
     var heldCaptionCount: Int { lock.lock(); defer { lock.unlock() }; return held.count }
     var captionRequestCount: Int { lock.lock(); defer { lock.unlock() }; return captionRequests }
+    var preparedRequests: [String] { lock.lock(); defer { lock.unlock() }; return preparedMediaRequests }
     init(media: Data) throws { self.media = media; listener = try NWListener(using: .tcp, on: .any) }
     func holdCaptions() { lock.lock(); holding = true; lock.unlock() }
     func holdMediaRequests() { lock.lock(); holdingMedia = true; lock.unlock() }
@@ -239,6 +241,9 @@ final class CaptionTestHTTPServer: @unchecked Sendable {
             if target.hasPrefix("/captions/") { lock.lock(); captionRequests += 1; lock.unlock() }
             guard auth == "Basic " + Data("viewer:synthetic-caption-secret".utf8).base64EncodedString() else {
                 send(connection, status: 401, body: Data(), contentType: "text/plain"); return
+            }
+            if target.hasPrefix("/web/media/") {
+                lock.lock(); preparedMediaRequests.append(target); lock.unlock()
             }
             if target.hasPrefix("/captions/") {
                 lock.lock(); let hold = holding, status = captionStatus, body = captionBody

@@ -15,6 +15,7 @@ struct MovieDetailView: View {
     @State private var viewingOnline = false
     @State private var loadedConnection: ServerConnection?
     @State private var loadedQualityProfiles: [QualityProfile]?
+    @State private var loadedCapabilities: ServerCapabilities?
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var loadError: UserFacingError?
@@ -23,7 +24,6 @@ struct MovieDetailView: View {
     @State private var qualityNotice: String?
     @State private var pendingDownloadDeletion: DownloadRecord?
     @State private var loadRequest = UUID()
-    @State private var showingDownloadChoices = false
     @State private var deletingRecordID: UUID?
     @State private var managingCopies: MovieLibraryKey?
     @State private var pendingCopyPlayback: DownloadRecord?
@@ -72,18 +72,6 @@ struct MovieDetailView: View {
         .onChange(of: app.downloads.completed) { _, records in
             if let deletingRecordID, !records.contains(where: { $0.id == deletingRecordID }) { dismiss() }
             if let current = localRecord, let updated = records.first(where: { $0.id == current.id }) { localRecord = updated }
-        }
-        .sheet(isPresented: $showingDownloadChoices) {
-            if let item {
-                NavigationStack {
-                    List {
-                        downloadChoice(item, kind: .compatible)
-                        downloadChoice(item, kind: .original)
-                    }
-                    .navigationTitle("Download")
-                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { showingDownloadChoices = false } } }
-                }
-            }
         }
         .sheet(isPresented: Binding(
             get: { managingCopies != nil }, set: { if !$0 { managingCopies = nil } }
@@ -239,6 +227,7 @@ struct MovieDetailView: View {
                 Text(movie.displayTitle)
                     .font(compact ? .title3.bold() : .largeTitle.bold())
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("detail-title")
             }
             ViewThatFits {
                 HStack(spacing: 8) { metadataPills }
@@ -260,7 +249,7 @@ struct MovieDetailView: View {
     @ViewBuilder
     private var metadataPills: some View {
         if let duration = movie.durationSeconds { MetadataPill(text: PlaybackTimeline.displayTime(duration)) }
-        if let resolution = movie.resolution { MetadataPill(text: resolution) }
+        if let resolution = movie.resolution { MetadataPill(text: resolution).accessibilityIdentifier("detail-resolution") }
         if let hdr = movie.hdr, hdr.lowercased() != "sdr" { MetadataPill(text: hdr.uppercased()) }
     }
 
@@ -342,12 +331,28 @@ struct MovieDetailView: View {
                 .accessibilityIdentifier("detail-favorite")
                 .accessibilityValue(app.userLibrary.isFavorite(for: libraryKey) ? "Favorite" : "Not favorite")
             }
+            if viewingOnline, let item, hasLoadedOnlineOwnership,
+               app.downloads.activeDownload(for: item.id) == nil {
+                Section {
+                    Button("Original file", systemImage: "arrow.down.doc") {
+                        startDownload(item: item, kind: .original)
+                    }
+                    .accessibilityIdentifier("download-original")
+                    .accessibilityHint("Downloads the unchanged source, including all original audio. Playback support varies.")
+                } header: {
+                    Text(downloadSummary(item, kind: .original).essential)
+                }
+            }
             if let record = localRecord ?? app.downloads.record(for: mediaID) {
                 let key = app.key(for: record)
                 let copies = DownloadMovieGroup.collect(records: app.downloads.completed, transfers: app.downloads.active)
                     .first { $0.key == key }?.copyCount ?? 0
-                if viewingOnline, item != nil, hasLoadedOnlineOwnership {
-                    Button("Download Another Copy", systemImage: "arrow.down.circle") { showingDownloadChoices = true }
+                if viewingOnline, let item, hasLoadedOnlineOwnership,
+                   app.downloads.activeDownload(for: item.id) == nil {
+                    Button("Download Using Preferences", systemImage: "arrow.down.circle") {
+                        startDownload(item: item, kind: .compatible)
+                    }
+                    .disabled(downloadIssue(item) != nil)
                 }
                 if copies > 1 {
                     Button("Manage Copies", systemImage: "square.on.square") { managingCopies = key }
@@ -366,19 +371,28 @@ struct MovieDetailView: View {
     }
 
     private func savedCopySummary(_ record: DownloadRecord) -> some View {
-        DisclosureGroup {
-            downloadSelections(quality: record.videoQualityDescription, audio: record.audioSelectionDescription)
-        } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                Label("Copy details",
-                      systemImage: record.isReadyToWatch ? "checkmark.circle" : "info.circle")
-                Text(ByteCountFormatter.string(fromByteCount: record.packageStorageBytes ?? record.byteCount, countStyle: .file))
-                    .font(.caption).foregroundStyle(Color.primary)
+        VStack(alignment: .leading, spacing: 6) {
+            DisclosureGroup {
+                downloadSelections(quality: record.videoQualityDescription, audio: record.audioSelectionDescription)
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Copy details",
+                          systemImage: record.isReadyToWatch ? "checkmark.circle" : "info.circle")
+                    Text(ByteCountFormatter.string(fromByteCount: record.packageStorageBytes ?? record.byteCount, countStyle: .file))
+                        .font(.caption).foregroundStyle(Color.primary)
+                }
+                .frame(minHeight: 44)
+                .accessibilityIdentifier("offline-copy-available")
             }
-            .frame(minHeight: 44)
-            .accessibilityIdentifier("offline-copy-available")
+            .font(.subheadline)
+            if record.assetInspection?.issue == .timedOut {
+                Button(app.downloads.revalidatingAssets.contains(record.id) ? "Checking Download…" : "Retry Verification") {
+                    app.downloads.retryVerification(record)
+                }
+                .frame(minHeight: 44)
+                .disabled(app.downloads.revalidatingAssets.contains(record.id))
+            }
         }
-        .font(.subheadline)
     }
 
     private func audioPicker(_ item: MediaItem) -> some View {
@@ -526,29 +540,11 @@ struct MovieDetailView: View {
                     Text(record.validationMessage ?? record.readinessMessage)
                         .font(.callout)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    let summary = DownloadOutputSummary(item: item, kind: .compatible, quality: selectedQuality,
-                                                        profile: selectedQualityProfile, audioIndex: selectedAudio)
-                    Text(summary.essential)
-                        .font(.subheadline).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    DisclosureGroup { outputFacts(item, kind: .compatible) } label: {
-                        Text("Format details").frame(minHeight: 44)
-                    }
-                    .font(.subheadline)
-                    Button("Download Compatible Copy") {
-                        startDownload(item: item, kind: .compatible)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color("ActionFill"))
+                    preferredDownload(item)
                 }
             }
         } else {
-            Button { showingDownloadChoices = true } label: {
-                Label("Download", systemImage: "arrow.down.circle")
-                    .frame(maxWidth: .infinity, minHeight: 44)
-            }
-            .buttonStyle(.bordered)
+            preferredDownload(item)
         }
     }
 
@@ -576,34 +572,46 @@ struct MovieDetailView: View {
             .contentShape(Rectangle())
     }
 
-    private func downloadChoice(_ item: MediaItem, kind: DownloadKind) -> some View {
-        let summary = DownloadOutputSummary(item: item, kind: kind, quality: selectedQuality,
-                                            profile: selectedQualityProfile, audioIndex: selectedAudio)
-        return Section {
+    private func preferredDownload(_ item: MediaItem) -> some View {
+        let summary = downloadSummary(item, kind: .compatible)
+        let audio = app.downloadPreferences.audioSelection == .all ? "All audio tracks"
+            : item.audioTracks.first(where: { $0.index == selectedAudio })?.displayName ?? "Selected audio"
+        return VStack(alignment: .leading, spacing: 6) {
             Button {
-                showingDownloadChoices = false
-                startDownload(item: item, kind: kind)
+                startDownload(item: item, kind: .compatible)
             } label: {
-                Text(kind == .compatible ? "Compatible copy" : "Original file")
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                Label("Download", systemImage: "arrow.down.circle")
+                    .frame(maxWidth: .infinity, minHeight: 44)
             }
-            .font(.headline)
-            .accessibilityHint("Immediately adds this choice to Downloads")
-            Text(summary.essential).font(.subheadline).foregroundStyle(.secondary)
+            .buttonStyle(.bordered)
+            .disabled(downloadIssue(item) != nil)
+            .accessibilityHint("Downloads immediately using your saved maximum quality and audio selection")
+            Text("\(app.downloadPreferences.maximumQuality?.label ?? "Source quality") · \(audio)")
+                .font(.caption).foregroundStyle(Color.primary.opacity(0.75))
                 .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("download-summary-\(kind.rawValue)")
-            DisclosureGroup { outputFacts(item, kind: kind) } label: {
-                Text("Format details").fixedSize(horizontal: false, vertical: true).frame(minHeight: 44)
-                    .accessibilityLabel(kind == .compatible ? "Compatible format details" : "Original format details")
+                .accessibilityIdentifier("preferred-download-summary")
+            if let issue = downloadIssue(item) {
+                Text(issue).font(.callout).fixedSize(horizontal: false, vertical: true)
             }
-                .font(.subheadline)
+            if let notice = summary.featureChangeNotice {
+                Text(notice).font(.caption).foregroundStyle(Color.primary.opacity(0.75))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            DisclosureGroup { outputFacts(item, kind: .compatible) } label: {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Download details")
+                        .accessibilityIdentifier("preferred-download-details")
+                    Text(summary.size).font(.caption).foregroundStyle(Color.primary.opacity(0.75))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(minHeight: 44)
+            }
+            .font(.subheadline)
         }
     }
 
     private func outputFacts(_ item: MediaItem, kind: DownloadKind) -> some View {
-        let summary = DownloadOutputSummary(item: item, kind: kind, quality: selectedQuality,
-                                            profile: selectedQualityProfile, audioIndex: selectedAudio)
+        let summary = downloadSummary(item, kind: kind)
         return VStack(alignment: .leading, spacing: 8) {
             Text(summary.video)
             Text(summary.audio)
@@ -677,9 +685,9 @@ struct MovieDetailView: View {
                 errorMessage = "Connect to the server and account that saved this movie to use its online options."
                 return
             }
-            let profiles: [QualityProfile]
-            if let capabilities = app.library.capabilities { profiles = capabilities.qualityProfiles }
-            else { profiles = try await owner.library(LibraryRequest(limit: 1)).capabilities.qualityProfiles }
+            let capabilities: ServerCapabilities
+            if let available = app.library.capabilities { capabilities = available }
+            else { capabilities = try await owner.library(LibraryRequest(limit: 1)).capabilities }
             guard request == loadRequest, !Task.isCancelled, viewingOnline,
                   app.client.connection?.serverIdentity == connection?.serverIdentity,
                   app.client.connection?.username == connection?.username else { return }
@@ -691,7 +699,8 @@ struct MovieDetailView: View {
             movie = MovieMetadata(item: loaded)
             if let connection { app.cacheMovie(loaded, connection: connection) }
             loadedConnection = connection
-            loadedQualityProfiles = profiles
+            loadedQualityProfiles = capabilities.qualityProfiles
+            loadedCapabilities = capabilities
             selectedAudio = app.playbackPreferences.audioIndex(in: loaded)
             resolveQualityPreference()
         } catch is CancellationError {
@@ -710,17 +719,57 @@ struct MovieDetailView: View {
             return
         }
         do {
+            if kind == .compatible, let issue = downloadIssue(item) {
+                errorMessage = issue
+                return
+            }
+            let resolution = resolvedDownloadQuality(item)
             try app.downloads.start(
                 item: item,
                 kind: kind,
                 client: app.client,
-                quality: selectedQuality,
-                qualityProfile: selectedQualityProfile,
-                audioIndex: selectedAudio
+                quality: resolution.quality ?? "auto",
+                qualityProfile: resolution.profile,
+                audioIndex: selectedAudio,
+                preserveHDR: app.downloadPreferences.preserveHDR,
+                downloadAudio: nativeDownloadAudio
             )
         } catch {
             app.report(error)
         }
+    }
+
+    private var nativeDownloadAudio: DownloadAudioSelection? {
+        loadedCapabilities?.nativeDownloads == true ? app.downloadPreferences.audioSelection : nil
+    }
+
+    private func resolvedDownloadQuality(_ item: MediaItem) -> DownloadQualityResolution {
+        guard let loadedCapabilities else {
+            return .init(profile: nil, quality: nil, issue: "Load online options before choosing a download.")
+        }
+        return app.downloadPreferences.resolve(item: item, capabilities: loadedCapabilities)
+    }
+
+    private func downloadIssue(_ item: MediaItem) -> String? {
+        let resolved = resolvedDownloadQuality(item)
+        if let issue = resolved.issue { return issue }
+        if app.downloadPreferences.audioSelection == .all && nativeDownloadAudio == nil {
+            return "Update the server to include all audio tracks in a compatible copy, or choose Original file."
+        }
+        let plan = CompatibleOutputPlan(item: item, quality: resolved.quality ?? "auto", audioIndex: selectedAudio,
+                                        preserveHDR: app.downloadPreferences.preserveHDR)
+        if app.downloadPreferences.preserveHDR, !item.hdr.isEmpty, item.hdr.lowercased() != "sdr",
+           plan.videoMode != "copy", plan.videoOutput != "hevc_hdr10" {
+            return "This server cannot preserve HDR at your download limit. Choose Original file, or turn off Preserve HDR in Settings for an SDR copy."
+        }
+        return nil
+    }
+
+    private func downloadSummary(_ item: MediaItem, kind: DownloadKind) -> DownloadOutputSummary {
+        let resolved = resolvedDownloadQuality(item)
+        return DownloadOutputSummary(item: item, kind: kind, quality: resolved.quality ?? "auto",
+            profile: resolved.profile, audioIndex: selectedAudio,
+            preserveHDR: app.downloadPreferences.preserveHDR, downloadAudio: nativeDownloadAudio)
     }
 
     private func downloadStatus(_ download: ActiveDownload) -> String? {

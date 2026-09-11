@@ -11,6 +11,7 @@
 		05AFD49870F6D0F48B8B758F /* DownloadPollingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C701653A39934DE45A21A6D6 /* DownloadPollingTests.swift */; };
 		05B71E44DD92D618A8E3D8CF /* WebVTT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3510B48A4A978D8E9BBF962A /* WebVTT.swift */; };
 		060F2F5B1B2D5CF97A89B0FC /* PlaybackActivityIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C15A2365123D8207B7EFBC02 /* PlaybackActivityIntegrationTests.swift */; };
+		06AB071B4CE32BBC747D6743 /* DownloadPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 383341C864C0EC6FAE9AFCCB /* DownloadPreferences.swift */; };
 		0910CDE3C751B0BE028F4062 /* ErrorRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9375B3C12B0142E4F6809A61 /* ErrorRecoveryView.swift */; };
 		09F3B3256CC7F4130594612A /* UserLibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B34F34CBC2E380E84E23FAFD /* UserLibraryStore.swift */; };
 		0BF756328A21301EB44F1AC0 /* RequestOwnershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EED056194640338DB1257F39 /* RequestOwnershipTests.swift */; };
@@ -38,6 +39,7 @@
 		412E18E628CDA7F07E34FEFF /* synthetic-native-tracks.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = 56149A2919D74A98161D2B77 /* synthetic-native-tracks.mp4 */; };
 		41474F11966DF3347CA3EBE7 /* SavedCollectionIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A89E7346E864F02AB59C1CDF /* SavedCollectionIntegrationTests.swift */; };
 		48D588676EF65C82E3A6F04B /* DownloadQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E4A244EFE9B78114184959C /* DownloadQueueTests.swift */; };
+		4A1FD041A0F8B6009C122CCB /* synthetic-server-hdr10.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = 662335A642B769E82A92B42D /* synthetic-server-hdr10.mp4 */; };
 		4DE4C1D36DABBF7FC0C81674 /* PlaybackRemoteCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE21C06D243AC1BE58A415A7 /* PlaybackRemoteCommandTests.swift */; };
 		4F4709CEC08BF913D57DF927 /* BrowseRestorationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B3AC466004F314D71CBBF12 /* BrowseRestorationTests.swift */; };
 		54FB7892653A4BF4766C50D3 /* DownloadCancellationOwnershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6194C9EAA20B223412262DE8 /* DownloadCancellationOwnershipTests.swift */; };
@@ -69,6 +71,7 @@
 		8A61C9FEE5B430D28542BFF2 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = AB5A0695389F5C695A2232E8 /* README.md */; };
 		8C7C39428F3E58632525A411 /* PlaybackTrustTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C3194A6ED6A5E5A5D69C9CD /* PlaybackTrustTests.swift */; };
 		8D913A59BA058795F2E2B6D9 /* synthetic-native-caption.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = ECCB3B58CB03911B0CA9F098 /* synthetic-native-caption.mp4 */; };
+		90B23F003D2AE78D5B8E6F05 /* ViewingExperienceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5538665660BD13D2E43F881 /* ViewingExperienceTests.swift */; };
 		90D356C590AF968FE19E32D2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8B60547FB0DE51A5E33CD3B5 /* Assets.xcassets */; };
 		90EA21E569DCD300EFB0A84A /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F920532F96A637877D5F9AA /* AppSettings.swift */; };
 		92B53398C1B1CE1A96A33A2C /* MovieDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A37961EA0731E9B17724E589 /* MovieDetailView.swift */; };
@@ -87,6 +90,7 @@
 		AD798C446D4E7E74000CD2A6 /* PlayerViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C2EAD94F2EC3E3F7595BFFA /* PlayerViewController.swift */; };
 		AF1576CECFE557795E34C049 /* DownloadPerformanceTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D705F607367B7DA6E1E1C7E /* DownloadPerformanceTrace.swift */; };
 		B273A30C22E775C02C2579B5 /* PreparedPlaybackSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8B650D0B224714F8ADE6262 /* PreparedPlaybackSession.swift */; };
+		B4C3223B76B865FA71ED31F2 /* synthetic-hdr10.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = B4E4716DCFFB64F11B7A5A1E /* synthetic-hdr10.mp4 */; };
 		B61BF71FBEBBB46FC261A23F /* ReviewRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94E6093D85A7B2C70343B40B /* ReviewRegressionTests.swift */; };
 		B6304242033B03994ACA676F /* OfflinePlaybackTracksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B58565E35EBF8636EC9F56F /* OfflinePlaybackTracksTests.swift */; };
 		B6A9C5D1E88A5DA7E2E07346 /* DownloadOutputContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11ABBE511B276ABCA89A7298 /* DownloadOutputContractTests.swift */; };
@@ -95,6 +99,7 @@
 		C0485BA8D1E39900D788F0A5 /* ArtworkPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85CFC691B4E672463E73CF71 /* ArtworkPipeline.swift */; };
 		C0B2E8B82262D22759C9AB9C /* PlaybackActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10EB05BC4EB461E7A302F043 /* PlaybackActivity.swift */; };
 		C54E9B15C4AFAEBE20107E03 /* PlayerScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7335FCBED5F02988A06A9BAC /* PlayerScreen.swift */; };
+		C74AB550B91C9CE8B9E85F58 /* DownloadPreferenceAndHDRTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3102574B363DD5FB713341 /* DownloadPreferenceAndHDRTests.swift */; };
 		C7C708F879593AC992A93787 /* DownloadAssetInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9170C91349882AFD73D8B732 /* DownloadAssetInspector.swift */; };
 		C940D783CF0A1A925197F280 /* PlaybackSystemTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFBDF39ADF5255FAB97DEC23 /* PlaybackSystemTests.swift */; };
 		CB05018FD7F7EBC048336757 /* PlaybackRemoteCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 765294B2EEB3CD82B590F653 /* PlaybackRemoteCommands.swift */; };
@@ -167,6 +172,7 @@
 		3673F5C5C2692BA5DF9CA44F /* AuthenticatedArtworkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthenticatedArtworkView.swift; sourceTree = "<group>"; };
 		36F4F614FB2749E5E52C079E /* CaptionPlaybackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionPlaybackTests.swift; sourceTree = "<group>"; };
 		37FAA6C38FD3A72D5C4E253E /* ArtworkPipelinePerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtworkPipelinePerformanceTests.swift; sourceTree = "<group>"; };
+		383341C864C0EC6FAE9AFCCB /* DownloadPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadPreferences.swift; sourceTree = "<group>"; };
 		3AF133E841629AA2FF83BBC3 /* DownloadResource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadResource.swift; sourceTree = "<group>"; };
 		3DC01DB4DD9A1FBF4BEA91C0 /* synthetic-stall-0.ts */ = {isa = PBXFileReference; path = "synthetic-stall-0.ts"; sourceTree = "<group>"; };
 		421A1B23CF697FE13AA8F450 /* DownloadModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadModels.swift; sourceTree = "<group>"; };
@@ -187,6 +193,7 @@
 		60749125CD163E50479EF9D6 /* synthetic-playback.mp4 */ = {isa = PBXFileReference; path = "synthetic-playback.mp4"; sourceTree = "<group>"; };
 		615A67A74AAC9CB7477AD2DE /* synthetic-stall-2.ts */ = {isa = PBXFileReference; path = "synthetic-stall-2.ts"; sourceTree = "<group>"; };
 		6194C9EAA20B223412262DE8 /* DownloadCancellationOwnershipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadCancellationOwnershipTests.swift; sourceTree = "<group>"; };
+		662335A642B769E82A92B42D /* synthetic-server-hdr10.mp4 */ = {isa = PBXFileReference; path = "synthetic-server-hdr10.mp4"; sourceTree = "<group>"; };
 		66F71A08D81EF3FC19940CFA /* DownloadSchedulingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadSchedulingTests.swift; sourceTree = "<group>"; };
 		686C1BD721CD3C293A4BC2DC /* DownloadMovieGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadMovieGroup.swift; sourceTree = "<group>"; };
 		68EB8E7749DFC8A254C54544 /* rustyView.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = rustyView.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -199,6 +206,7 @@
 		764CDE7916E012093CA93FA4 /* DownloadOutputSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadOutputSummary.swift; sourceTree = "<group>"; };
 		765294B2EEB3CD82B590F653 /* PlaybackRemoteCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackRemoteCommands.swift; sourceTree = "<group>"; };
 		79E4D877E84E95BF60A876B2 /* SavedMoviesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedMoviesView.swift; sourceTree = "<group>"; };
+		7B3102574B363DD5FB713341 /* DownloadPreferenceAndHDRTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadPreferenceAndHDRTests.swift; sourceTree = "<group>"; };
 		7B58565E35EBF8636EC9F56F /* OfflinePlaybackTracksTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflinePlaybackTracksTests.swift; sourceTree = "<group>"; };
 		85CFC691B4E672463E73CF71 /* ArtworkPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtworkPipeline.swift; sourceTree = "<group>"; };
 		874CC73DDD8F8D97F05DD0BA /* OwnedMediaRelay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwnedMediaRelay.swift; sourceTree = "<group>"; };
@@ -215,6 +223,7 @@
 		A37961EA0731E9B17724E589 /* MovieDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieDetailView.swift; sourceTree = "<group>"; };
 		A4A0F24F81230A96490CF258 /* DownloadManifestStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManifestStore.swift; sourceTree = "<group>"; };
 		A52B17155864365A889D23D8 /* MovieMetadataCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieMetadataCache.swift; sourceTree = "<group>"; };
+		A5538665660BD13D2E43F881 /* ViewingExperienceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewingExperienceTests.swift; sourceTree = "<group>"; };
 		A7F6F33F6863E7D9F2CE46BE /* synthetic-playback.ts */ = {isa = PBXFileReference; path = "synthetic-playback.ts"; sourceTree = "<group>"; };
 		A89E7346E864F02AB59C1CDF /* SavedCollectionIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedCollectionIntegrationTests.swift; sourceTree = "<group>"; };
 		AB5A0695389F5C695A2232E8 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
@@ -224,6 +233,7 @@
 		B34F34CBC2E380E84E23FAFD /* UserLibraryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserLibraryStore.swift; sourceTree = "<group>"; };
 		B37B5738EE2D251F5BBA8E58 /* DownloadMovieGroupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadMovieGroupTests.swift; sourceTree = "<group>"; };
 		B4BA5339895D22596DBB214E /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		B4E4716DCFFB64F11B7A5A1E /* synthetic-hdr10.mp4 */ = {isa = PBXFileReference; path = "synthetic-hdr10.mp4"; sourceTree = "<group>"; };
 		B59E1EA1503B8ACFFB669319 /* DownloadManagerRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManagerRuntime.swift; sourceTree = "<group>"; };
 		BB1B4831EA7A6860586F90BC /* synthetic-offline-valid.mp4 */ = {isa = PBXFileReference; path = "synthetic-offline-valid.mp4"; sourceTree = "<group>"; };
 		BC4F080FA0164F2BC25A3DD0 /* RustyViewAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustyViewAppDelegate.swift; sourceTree = "<group>"; };
@@ -298,9 +308,11 @@
 			isa = PBXGroup;
 			children = (
 				AB5A0695389F5C695A2232E8 /* README.md */,
+				B4E4716DCFFB64F11B7A5A1E /* synthetic-hdr10.mp4 */,
 				56149A2919D74A98161D2B77 /* synthetic-native-tracks.mp4 */,
 				98023D925D5DE783BAB9419F /* synthetic-offline-unsupported.webm */,
 				BB1B4831EA7A6860586F90BC /* synthetic-offline-valid.mp4 */,
+				662335A642B769E82A92B42D /* synthetic-server-hdr10.mp4 */,
 			);
 			path = Fixtures;
 			sourceTree = "<group>";
@@ -314,6 +326,7 @@
 				A4A0F24F81230A96490CF258 /* DownloadManifestStore.swift */,
 				421A1B23CF697FE13AA8F450 /* DownloadModels.swift */,
 				1D705F607367B7DA6E1E1C7E /* DownloadPerformanceTrace.swift */,
+				383341C864C0EC6FAE9AFCCB /* DownloadPreferences.swift */,
 				27785D0BAABC2239146C2CA3 /* DownloadProgressDelivery.swift */,
 				B25E5D58BF434BCC47CAC928 /* DownloadProgressPresentation.swift */,
 				FF235AC1DEEC0CED4189DC10 /* DownloadQueueStore.swift */,
@@ -448,6 +461,7 @@
 				B37B5738EE2D251F5BBA8E58 /* DownloadMovieGroupTests.swift */,
 				11ABBE511B276ABCA89A7298 /* DownloadOutputContractTests.swift */,
 				C701653A39934DE45A21A6D6 /* DownloadPollingTests.swift */,
+				7B3102574B363DD5FB713341 /* DownloadPreferenceAndHDRTests.swift */,
 				F1E5F842A5FD37EAFE80ACF3 /* DownloadProgressDeliveryTests.swift */,
 				6E4A244EFE9B78114184959C /* DownloadQueueTests.swift */,
 				E8C7CE24DAF73F292636E9B3 /* DownloadResumeTests.swift */,
@@ -468,6 +482,7 @@
 				F471FBA6C404797D50ACD9BD /* RustyViewCoreTests.swift */,
 				A89E7346E864F02AB59C1CDF /* SavedCollectionIntegrationTests.swift */,
 				E51F48EF920BE1CB60F50D92 /* UserLibraryStoreTests.swift */,
+				A5538665660BD13D2E43F881 /* ViewingExperienceTests.swift */,
 				225F580DC34660829A2AC7E2 /* Fixtures */,
 			);
 			path = rustyViewTests;
@@ -610,9 +625,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				8A61C9FEE5B430D28542BFF2 /* README.md in Resources */,
+				B4C3223B76B865FA71ED31F2 /* synthetic-hdr10.mp4 in Resources */,
 				412E18E628CDA7F07E34FEFF /* synthetic-native-tracks.mp4 in Resources */,
 				BD2FB7439CB6A144762ABCD1 /* synthetic-offline-unsupported.webm in Resources */,
 				EB224BB213D135A03F9DEEF7 /* synthetic-offline-valid.mp4 in Resources */,
+				4A1FD041A0F8B6009C122CCB /* synthetic-server-hdr10.mp4 in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -654,6 +671,7 @@
 				0C8A0038E08F603CA77EA6EB /* DownloadMovieGroup.swift in Sources */,
 				D6E3939B6F49F650B7932C8D /* DownloadOutputSummary.swift in Sources */,
 				AF1576CECFE557795E34C049 /* DownloadPerformanceTrace.swift in Sources */,
+				06AB071B4CE32BBC747D6743 /* DownloadPreferences.swift in Sources */,
 				3D83E4964A970AED3CBB0AA0 /* DownloadProgressDelivery.swift in Sources */,
 				1042A8BA4769D82E16A44A94 /* DownloadProgressPresentation.swift in Sources */,
 				0D5D9D6DA3C0FEDFF7BB9294 /* DownloadQueueStore.swift in Sources */,
@@ -729,6 +747,7 @@
 				305045653ED29351F9B1633A /* DownloadMovieGroupTests.swift in Sources */,
 				B6A9C5D1E88A5DA7E2E07346 /* DownloadOutputContractTests.swift in Sources */,
 				05AFD49870F6D0F48B8B758F /* DownloadPollingTests.swift in Sources */,
+				C74AB550B91C9CE8B9E85F58 /* DownloadPreferenceAndHDRTests.swift in Sources */,
 				85559DCA61217EDC3EAAC0F0 /* DownloadProgressDeliveryTests.swift in Sources */,
 				48D588676EF65C82E3A6F04B /* DownloadQueueTests.swift in Sources */,
 				5A276C44B1DE9B91BABBD8E1 /* DownloadResumeTests.swift in Sources */,
@@ -749,6 +768,7 @@
 				E0B008DE2C7CEA149177B3B3 /* RustyViewCoreTests.swift in Sources */,
 				41474F11966DF3347CA3EBE7 /* SavedCollectionIntegrationTests.swift in Sources */,
 				1738DB1B3189892295EC3EBE /* UserLibraryStoreTests.swift in Sources */,
+				90B23F003D2AE78D5B8E6F05 /* ViewingExperienceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

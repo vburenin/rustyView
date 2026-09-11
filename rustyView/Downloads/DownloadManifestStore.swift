@@ -8,6 +8,7 @@ enum DownloadStoreError: LocalizedError {
     case incompatibleDownload
     case invalidDownloadedFile
     case conflictingDownload
+    case verificationTimedOut
 
     var errorDescription: String? {
         switch self {
@@ -18,6 +19,7 @@ enum DownloadStoreError: LocalizedError {
         case .incompatibleDownload: "The downloaded copy could not be verified for offline playback. Please try downloading a compatible copy again."
         case .invalidDownloadedFile: "The download did not contain a regular media file."
         case .conflictingDownload: "A different stored file already owns this download. Remove that queue entry and start a new download."
+        case .verificationTimedOut: "Checking this movie stopped making progress. The downloaded bytes are kept. Retry to check them again without downloading the movie again."
         }
     }
 }
@@ -25,11 +27,13 @@ enum DownloadStoreError: LocalizedError {
 final class DownloadManifestStore: @unchecked Sendable {
     let rootDirectory: URL
     private let fileManager: FileManager
+    private let inspectionProgressTimeout: TimeInterval
     private let lock = NSRecursiveLock()
     var stateStore: DownloadStateStore { DownloadStateStore(rootDirectory: rootDirectory, fileManager: fileManager) }
 
-    init(rootDirectory: URL? = nil, fileManager: FileManager = .default) {
+    init(rootDirectory: URL? = nil, fileManager: FileManager = .default, inspectionProgressTimeout: TimeInterval = 30) {
         self.fileManager = fileManager
+        self.inspectionProgressTimeout = inspectionProgressTimeout
         if let rootDirectory {
             self.rootDirectory = rootDirectory
         } else {
@@ -105,10 +109,13 @@ final class DownloadManifestStore: @unchecked Sendable {
 
     /// Reinspect legacy records off the main actor. Commit only if the same record
     /// still exists, so deletion or replacement during inspection cannot restore it.
-    func revalidatePendingAssets() throws -> DownloadManifest {
-        let pending = try loadValidated().records.filter { $0.assetInspection == nil }
+    func revalidatePendingAssets(recordID: UUID? = nil) throws -> DownloadManifest {
+        let pending = try loadValidated().records.filter {
+            (recordID == nil || $0.id == recordID)
+                && ($0.assetInspection == nil || $0.assetInspection?.issue == .timedOut)
+        }
         for record in pending {
-            let inspection = DownloadAssetInspector.inspect(localURL(for: record))
+            let inspection = DownloadAssetInspector.inspect(localURL(for: record), progressTimeout: inspectionProgressTimeout)
             try updateInspection(inspection, for: record)
         }
         return try loadValidated()
@@ -200,7 +207,7 @@ final class DownloadManifestStore: @unchecked Sendable {
             audioTrackIndex: metadata.audioTrackIndex,
             audioTrackLabel: metadata.audioTrackLabel,
             accountUsername: metadata.accountUsername,
-            assetInspection: inspection
+            assetInspection: inspection, videoOutput: metadata.videoOutput, downloadAudio: metadata.downloadAudio
         )
         do {
             // A compatible copy must not destroy an intentionally retained original,
@@ -238,8 +245,10 @@ final class DownloadManifestStore: @unchecked Sendable {
         }
         let inspection = DownloadAssetInspector.inspect(
             temporaryURL,
-            fileExtension: metadata.kind == .compatible ? "mp4" : metadata.fileExtension
+            fileExtension: metadata.kind == .compatible ? "mp4" : metadata.fileExtension,
+            progressTimeout: inspectionProgressTimeout
         )
+        if inspection.issue == .timedOut { throw DownloadStoreError.verificationTimedOut }
         guard metadata.kind == .original || (inspection.integrity == .verified && inspection.playability == .playable) else {
             throw DownloadStoreError.incompatibleDownload
         }

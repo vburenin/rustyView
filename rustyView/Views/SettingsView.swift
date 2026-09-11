@@ -45,7 +45,32 @@ struct SettingsView: View {
                 .accessibilityIdentifier("preferred-audio-language")
                 .accessibilityLabel("Audio language")
                 .accessibilityValue(audioLanguageLabel)
+                SelectionPicker(title: "Subtitles", selection: Binding(
+                    get: { app.playbackPreferences.subtitleMode }, set: { app.playbackPreferences.subtitleMode = $0 }),
+                    options: SubtitlePreferenceMode.allCases.map { SelectionOption(value: $0, title: $0.label) },
+                    listIdentifier: "subtitle-preference-list") {
+                    preferenceLabel("Subtitles", value: app.playbackPreferences.subtitleMode.label)
+                }
+                .accessibilityIdentifier("preferred-subtitles")
+                .accessibilityLabel("Subtitles")
+                .accessibilityValue(app.playbackPreferences.subtitleMode.label)
+                SelectionPicker(title: "Subtitle Language", selection: Binding(
+                    get: { app.playbackPreferences.preferredSubtitleLanguage }, set: { app.playbackPreferences.preferredSubtitleLanguage = $0 }),
+                    options: [SelectionOption(value: String?.none, title: "Automatic")]
+                        + audioLanguages.map { SelectionOption(value: Optional($0),
+                            title: Locale.current.localizedString(forLanguageCode: $0) ?? $0) },
+                    listIdentifier: "subtitle-language-list") {
+                    preferenceLabel("Subtitle language", value: app.playbackPreferences.preferredSubtitleLanguage
+                        .map { Locale.current.localizedString(forLanguageCode: $0) ?? $0 } ?? "Automatic")
+                }
+                .disabled(app.playbackPreferences.subtitleMode != .always)
+                .accessibilityIdentifier("preferred-subtitle-language")
+                .accessibilityLabel("Subtitle language")
+                .accessibilityValue(app.playbackPreferences.preferredSubtitleLanguage
+                    .map { Locale.current.localizedString(forLanguageCode: $0) ?? $0 } ?? "Automatic")
                 Text("Applies to your next movie. Lower quality uses less data.")
+                    .font(.footnote).foregroundStyle(Color.primary.opacity(0.75))
+                Text("Automatic follows the video’s default subtitles and your device’s caption settings. Choosing subtitles in the player remembers that language.")
                     .font(.footnote).foregroundStyle(Color.primary.opacity(0.75))
             } header: {
                 sectionTitle("Playback")
@@ -66,6 +91,31 @@ struct SettingsView: View {
             }
 
             Section {
+                SelectionPicker(title: "Maximum Download Quality", selection: Binding(
+                    get: { app.downloadPreferences.maximumQuality },
+                    set: { app.downloadPreferences.maximumQuality = $0 }), options: downloadQualityOptions,
+                    listIdentifier: "download-quality-list") {
+                    preferenceLabel("Maximum quality", value: app.downloadPreferences.maximumQuality?.label ?? "Source quality")
+                }
+                .accessibilityIdentifier("preferred-download-quality")
+                .accessibilityLabel("Maximum quality")
+                .accessibilityValue(app.downloadPreferences.maximumQuality?.label ?? "Source quality")
+                Text("Downloads keep this resolution and video bitrate or lower. Smaller movies are never enlarged. Streaming quality is set separately.")
+                    .font(.footnote).foregroundStyle(Color.primary.opacity(0.75))
+                Toggle("Preserve HDR", isOn: Binding(get: { app.downloadPreferences.preserveHDR },
+                    set: { app.downloadPreferences.preserveHDR = $0 }))
+                    .accessibilityIdentifier("preserve-download-hdr")
+                SelectionPicker(title: "Downloaded Audio", selection: Binding(
+                    get: { app.downloadPreferences.audioSelection }, set: { app.downloadPreferences.audioSelection = $0 }),
+                    options: DownloadAudioSelection.allCases.map { SelectionOption(value: $0, title: $0.label) },
+                    listIdentifier: "download-audio-list") {
+                    preferenceLabel("Audio tracks", value: app.downloadPreferences.audioSelection.label)
+                }
+                .accessibilityIdentifier("preferred-download-audio")
+                .accessibilityLabel("Audio tracks")
+                .accessibilityValue(app.downloadPreferences.audioSelection.label)
+                Text("Supported audio keeps its original channels. HDR and additional audio tracks require server support; each download shows what will be included.")
+                    .font(.footnote).foregroundStyle(Color.primary.opacity(0.75))
                 Menu {
                     Button {
                         app.settings.allowCellularDownloads = true
@@ -134,6 +184,16 @@ struct SettingsView: View {
         app.playbackPreferences.quality(in: app.library.capabilities?.qualityProfiles ?? [])
     }
 
+    private var downloadQualityOptions: [SelectionOption<DownloadQualityLimit?>] {
+        var limits = Set((app.library.capabilities?.qualityProfiles ?? []).filter { $0.id != "auto" }.map(DownloadQualityLimit.init))
+        limits.insert(.phoneDefault)
+        if let saved = app.downloadPreferences.maximumQuality { limits.insert(saved) }
+        return limits.sorted {
+            $0.height == $1.height ? $0.videoKbps < $1.videoKbps : $0.height < $1.height
+        }.map { SelectionOption(value: Optional($0), title: $0.label) }
+            + [SelectionOption(value: nil, title: "Source quality")]
+    }
+
     private var qualityOptions: [SelectionOption<String>] {
         [SelectionOption(value: "auto", title: "Auto")]
             + (app.library.capabilities?.qualityProfiles.filter { $0.id != "auto" } ?? [])
@@ -194,6 +254,7 @@ struct SettingsView: View {
     private var audioLanguages: [String] {
         var values = Set(["en", "es", "fr", "de", "it", "pt", "ja", "ko", "zh", "ru", "uk", "ar", "hi"])
         if let saved = app.playbackPreferences.preferredAudioLanguage { values.insert(saved) }
+        if let saved = app.playbackPreferences.preferredSubtitleLanguage { values.insert(saved) }
         return values.sorted {
             (Locale.current.localizedString(forLanguageCode: $0) ?? $0)
                 .localizedStandardCompare(Locale.current.localizedString(forLanguageCode: $1) ?? $1) == .orderedAscending

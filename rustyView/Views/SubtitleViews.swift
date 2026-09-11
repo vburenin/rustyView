@@ -5,6 +5,10 @@ struct SubtitleFeedbackView: View {
     @EnvironmentObject private var app: AppModel
 
     var body: some View {
+        if let notice = app.player.subtitlePreferenceNotice {
+            Text(notice).font(.caption).fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("subtitle-preference-notice")
+        }
         switch app.player.subtitleSelection {
         case .off, .active:
             EmptyView()

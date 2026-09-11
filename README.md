@@ -49,6 +49,9 @@ password. Cancelling a connection attempt leaves your previous connection intact
 
 ## Pick up where you left off
 
+**My Movies** puts Continue Watching, Favorites, and History in their own tab,
+with search across your saved library and within each collection. Library also
+offers the latest unfinished movie with a direct Resume action.
 **Continue Watching** brings unfinished movies back within reach. Tap **Resume**
 to continue or choose **Start Over** from the row's actions menu. Start Over first saves that choice;
 if saving fails, your current player and previous saved position remain available.
@@ -116,6 +119,9 @@ If a stream points outside your connected server, playback stops with an error.
 rustyView does not follow that reference or automatically try another format.
 Check the connection before retrying; saved movies remain available offline.
 
+Settings remembers **Automatic**, **Always On**, or **Off**, plus a preferred
+subtitle language. Choosing a language or Off in the player remembers it for
+the next movie. A missing preferred language is explained without erasing it.
 Subtitles show a loading state until usable text arrives. If a subtitle cannot
 load, **Retry Subtitles** tries that choice again and **Turn Subtitles Off**
 clears it. The menu includes embedded subtitles exposed by the device and
@@ -129,16 +135,38 @@ changed the playback intent. A movie opened during the interruption stays
 paused until you choose Play. If iOS restarts its audio services, rustyView prepares the current movie
 at its retained position and waits for **Play**. Now Playing and remote
 controls follow the current movie's position, speed, and play/pause state;
-closing the player releases those controls.
+closing the player releases those controls. A routine position-save failure
+shows a nonblocking notice with **Retry Saving Progress**; playback continues.
+Start Over still waits for a successful save before replacing the player.
 
 ## Download now, watch later
 
-Open a movie, tap **Download**, and choose **Compatible copy** for a version
-prepared for playback on your device. Choose **Original file** when you want
-the source file and know your device can play it. Selecting either option
-starts the download immediately. The choice shows the selected audio, quality,
-and what the copy preserves. Source-file size and estimated output size are
-labelled separately; some copies have no reliable size until downloading.
+Open a movie and tap **Download** to start immediately using your saved download
+preferences and the selected audio language. The movie's Audio control overrides
+the preferred language for that download. **Download details** shows the expected
+output and size; some copies have no reliable size until downloading. To save
+the unchanged source instead, choose **Original file** from the movie's **(…)**
+menu. That action also starts immediately and retains all source audio tracks;
+playback support varies.
+
+**Settings → Downloads → Maximum quality** saves a download-only resolution and
+video bitrate limit, initially 1080p / 8 Mbps. It is independent of streaming
+quality. Smaller sources retain their dimensions. If the server cannot honor
+the limit, the app explains the problem before offering that copy.
+
+With a supporting rustyDLNA server, compatible downloads preserve supported
+audio and can include all audio tracks; unsupported audio becomes AAC with up
+to eight channels. Separate subtitle files are included when available;
+embedded subtitles are omitted from compatible copies. Video budgets exclude
+preserved audio, so the final file size can be larger.
+
+**Preserve HDR** is on by default. Compatible encoding requests source-specific
+HEVC HDR10 when the server advertises it. If HDR cannot survive the chosen
+download limit, choose Original or explicitly allow SDR in Settings. Streaming
+also tries advertised HDR output before portable SDR recovery and explains an
+HDR playback failure. HDR encoding and native audio downloads require the
+corresponding rustyDLNA API support; screen brightness and Dolby Vision output
+still require validation on the target device.
 
 **Downloads** and movie details show preparation progress and bytes received.
 Once the final size is available, they also show transfer percentage and bytes
@@ -159,13 +187,16 @@ Transient download failures retry automatically up to six times; after that,
 choose **Retry Now** when your connection is available.
 Failed requests and their selected format remain in the queue across relaunches
 until you retry or remove them. Retry requires the account that requested the
-download.
+download. Retrying a stalled local verification uses the retained bytes and
+does not require signing in or downloading them again.
 
 rustyView inspects downloaded video before marking it ready. An original that
 the device cannot play remains stored with that limitation shown. You can
 download a compatible copy while keeping the original. Inspection checks the
 media structure and sample decoding; an actual playback failure still offers
-recovery. Older copies are checked again locally, and older copies without
+recovery. Verification can continue beyond thirty seconds while it makes
+progress. A stalled check remains retryable instead of being labeled an
+unsupported codec. Older copies are checked again locally, and older copies without
 account information stay accessible in Downloads without being attached to a
 new account's library.
 
@@ -174,7 +205,7 @@ it to let transfers continue. Pause a transfer and resume it later; rustyView
 preserves transferred bytes when the server and system support resumption.
 An older server or a changing prepared file may require a fresh transfer, which
 the queue explains. To save mobile data, select **Wi-Fi Only** under
-**Settings → Download Network**. Waiting for Wi-Fi, a paused download, and a
+**Settings → Downloads → Network**. Waiting for Wi-Fi, a paused download, and a
 scheduled retry have distinct states. A small number of transfers run at once;
 the rest remain queued. Choose **Delete Download** from a copy's actions menu to free space on
 your device; your server's original stays in your library. Saved-file storage

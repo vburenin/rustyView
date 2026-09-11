@@ -14,6 +14,12 @@ struct RootView: View {
             .tag(AppTab.library)
 
             NavigationStack {
+                MyMoviesView()
+            }
+            .tabItem { Label("My Movies", systemImage: "heart.text.clipboard") }
+            .tag(AppTab.saved)
+
+            NavigationStack {
                 DownloadsView()
             }
             .tabItem { Label("Downloads", systemImage: "arrow.down.circle.fill") }
@@ -36,6 +42,9 @@ struct RootView: View {
         .onChange(of: app.downloads.isRestoring) { _, _ in
             resolveInitialDestination()
         }
+        .onChange(of: app.userLibrary.isRestoring) { _, _ in
+            resolveInitialDestination()
+        }
         .onChange(of: app.isConfigured) { _, configured in
             if configured {
                 app.showingConnection = false
@@ -43,13 +52,16 @@ struct RootView: View {
             } else if hasLocalWork {
                 app.showingConnection = false
                 app.selectedTab = .downloads
+            } else if hasSavedLibrary {
+                app.showingConnection = false
+                app.selectedTab = .saved
             } else if !app.downloads.isRestoring {
                 app.showingConnection = true
             }
         }
         .sheet(isPresented: $app.showingConnection) {
-            ConnectionSetupView(canDismiss: app.isConfigured || hasLocalWork)
-                .interactiveDismissDisabled(!app.isConfigured && !hasLocalWork)
+            ConnectionSetupView(canDismiss: app.isConfigured || hasLocalWork || hasSavedLibrary)
+                .interactiveDismissDisabled(!app.isConfigured && !hasLocalWork && !hasSavedLibrary)
         }
         .sheet(isPresented: $app.showingCompatibilityHelp) {
             NavigationStack {
@@ -99,10 +111,11 @@ struct RootView: View {
     private var hasLocalWork: Bool {
         !app.downloads.completed.isEmpty || !app.downloads.active.isEmpty
     }
+    private var hasSavedLibrary: Bool { !app.userLibrary.entries.isEmpty }
 
     private func resolveInitialDestination() {
         guard !resolvedInitialDestination else { return }
-        if app.downloads.isRestoring && !app.isConfigured {
+        if (app.downloads.isRestoring || app.userLibrary.isRestoring) && !app.isConfigured {
             app.selectedTab = .downloads
             return
         }
@@ -111,6 +124,8 @@ struct RootView: View {
             app.selectedTab = .library
         } else if hasLocalWork {
             app.selectedTab = .downloads
+        } else if hasSavedLibrary {
+            app.selectedTab = .saved
         } else {
             app.showingConnection = true
         }

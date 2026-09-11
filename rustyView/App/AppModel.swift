@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 
-enum AppTab: Hashable { case library, downloads, settings }
+enum AppTab: Hashable { case library, saved, downloads, settings }
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -13,6 +13,7 @@ final class AppModel: ObservableObject {
     let movieCache: MovieMetadataCache
     let userLibrary: UserLibraryStore
     let playbackPreferences: PlaybackPreferences
+    let downloadPreferences: DownloadPreferences
 
     @Published private(set) var isConfigured = false
     @Published var selectedTab = AppTab.library
@@ -72,6 +73,7 @@ final class AppModel: ObservableObject {
         userLibrary = suppliedUserLibrary ?? UserLibraryStore(directory: userLibraryDirectory,
             legacyProgressStore: PlaybackProgressStore(defaults: defaults))
         playbackPreferences = suppliedPreferences ?? PlaybackPreferences(defaults: defaults)
+        downloadPreferences = DownloadPreferences(defaults: defaults)
         library = LibraryModel(client: client, defaults: defaults)
         if let suppliedDownloads {
             downloads = suppliedDownloads
@@ -111,6 +113,7 @@ final class AppModel: ObservableObject {
             movieCache.objectWillChange.eraseToAnyPublisher(),
             userLibrary.objectWillChange.eraseToAnyPublisher(),
             playbackPreferences.objectWillChange.eraseToAnyPublisher(),
+            downloadPreferences.objectWillChange.eraseToAnyPublisher(),
         ])
         .receive(on: DispatchQueue.main)
         .sink { [weak self] _ in self?.objectWillChange.send() }

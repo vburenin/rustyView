@@ -127,6 +127,8 @@ enum DownloadOwnership {
             && left.kind == right.kind
             && left.qualityID == right.qualityID
             && left.audioTrackIndex == right.audioTrackIndex
+            && left.videoOutput == right.videoOutput
+            && left.downloadAudio == right.downloadAudio
     }
 }
 

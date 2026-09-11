@@ -164,6 +164,10 @@ while IFS= read -r -d '' file; do
             ;;
         *.mp4|*.ts|*.webm)
             case "$file" in
+                rustyViewTests/Fixtures/synthetic-hdr10.mp4|rustyViewTests/Fixtures/synthetic-server-hdr10.mp4)
+                    # Generated pattern/tone and isolated server output; provenance
+                    # is recorded in rustyViewTests/Fixtures/README.md.
+                    ;;
                 rustyViewUITests/Fixtures/synthetic-playback.mp4|rustyViewUITests/Fixtures/synthetic-playback.ts|rustyViewUITests/Fixtures/synthetic-multiaudio.mp4|rustyViewUITests/Fixtures/synthetic-native-caption.mp4|rustyViewUITests/Fixtures/synthetic-stall-0.ts|rustyViewUITests/Fixtures/synthetic-stall-1.ts|rustyViewUITests/Fixtures/synthetic-stall-2.ts|rustyViewTests/Fixtures/synthetic-offline-valid.mp4|rustyViewTests/Fixtures/synthetic-offline-unsupported.webm|rustyViewTests/Fixtures/synthetic-native-tracks.mp4)
                     ;;
                 *)

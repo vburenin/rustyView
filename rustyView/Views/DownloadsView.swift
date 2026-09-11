@@ -528,6 +528,12 @@ struct DownloadCopiesView: View {
                                         Label("Details", systemImage: "info.circle")
                                     }
                                     .accessibilityIdentifier("copy-details-\(record.id.uuidString)")
+                                    if record.assetInspection?.issue == .timedOut {
+                                        Button("Retry Verification", systemImage: "arrow.clockwise") {
+                                            app.downloads.retryVerification(record)
+                                        }
+                                        .disabled(app.downloads.revalidatingAssets.contains(record.id))
+                                    }
                                     Button("Delete Download", systemImage: "trash", role: .destructive) { pendingDeletion = record }
                                         .accessibilityIdentifier("delete-download-\(record.id.uuidString)")
                                         .accessibilityLabel("Delete \(record.kind == .original ? "original" : "compatible") copy of \(record.displayTitle)")

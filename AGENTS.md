@@ -147,6 +147,24 @@ cohesive product rather than independent demos.
   Saved-row and detail requests fetch unknown profiles through a captured
   connection without mutating browse state; the active player retains those
   profiles and the notice across automatic recovery.
+- Subtitle mode and language persist across viewings, with Automatic, Always On
+  and Off settings. Missing preferred tracks leave the preference intact and
+  show a notice. Routine progress-save failures use a nonmodal retry notice;
+  required Start Over persistence still owns the blocking error boundary.
+- My Movies provides visible Favorites, History and Continue Watching with local
+  search. Library offers direct Resume for the latest unfinished movie. Saved
+  collections remain reachable without a connection even without a local copy.
+- `DownloadPreferences` owns a separate persisted maximum resolution/video bitrate,
+  HDR preservation and selected/all audio choice. Native download capability
+  disables server AI enlargement and preserves supported audio channels; legacy
+  servers must still satisfy the saved limit. Source-specific prepared video
+  outputs permit HEVC HDR10 before disclosed SDR playback recovery. Compatible
+  HDR downloads are blocked when the server cannot preserve HDR unless the user
+  allows SDR. Owned-file metadata uses inspected dimensions and HDR signaling.
+- Download verification limits idle time, not the total time spent advancing
+  through samples. A timeout retains the ingress receipt and bytes with an exact
+  transfer-owned verification retry; it never proves codec incompatibility.
+  Previously stored copies with a timed-out check can also be rechecked locally.
 - Compatible offline downloads use a background `URLSession`, install a
   self-contained MP4 into Application Support, update an atomic manifest, and
   play from a local file URL without recontacting the server. Manifest records
@@ -190,8 +208,9 @@ cohesive product rather than independent demos.
   See `docs/ENERGY_DIAGNOSTICS.md` for measurement methods and limits.
   Cellular downloads are allowed by default; the persisted
   Settings choice can restrict current and future movie downloads to Wi-Fi.
-  The rendition menu is the final download decision: selecting Compatible copy
-  or Original file must enqueue immediately, without a second confirmation.
+  Download immediately enqueues a compatible copy using saved download preferences
+  and the currently selected audio language. Original file is a direct action in
+  the movie's (…) menu. Neither action opens another chooser or confirmation.
   Active rows navigate to movie details; nested cancel controls must use an
   isolated button style so a row tap can never cancel a download.
 - A versioned atomic download queue records intent before system task creation,
@@ -240,6 +259,14 @@ cohesive product rather than independent demos.
   double-tap seeking. Separate audits cover accessibility semantics, contrast,
   hit regions, clipping, and the accessibility-XXXL layout. Keep these checks
   semantic and end-to-end.
+- Run contrast checks before the predictive font-clipping audit, which changes
+  the app's text-size state. Settings audits relaunch at the requested category
+  and assert the actual font geometry. On iOS 26.5, the Downloads settings
+  section's predictive clipping check reports an issue without an element,
+  including with native LabeledContent. That section instead measures every
+  title, selected value and explanatory note against UIFont bounds at each
+  tested size, checks overlap and readable-area containment, and measures text
+  contrast from actual sRGB pixels. Control and navigation audits remain enabled.
 - Simulator coverage is a development gate, not a substitute for the real-device
   checklist at the end of this file.
 

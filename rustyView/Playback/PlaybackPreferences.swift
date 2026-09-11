@@ -9,12 +9,20 @@ final class PlaybackPreferences: ObservableObject {
     @Published var preferredAudioLanguage: String? {
         didSet { defaults.set(preferredAudioLanguage, forKey: "playback.preferredAudioLanguage") }
     }
+    @Published var subtitleMode: SubtitlePreferenceMode {
+        didSet { defaults.set(subtitleMode.rawValue, forKey: "playback.subtitleMode") }
+    }
+    @Published var preferredSubtitleLanguage: String? {
+        didSet { defaults.set(preferredSubtitleLanguage, forKey: "playback.preferredSubtitleLanguage") }
+    }
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         preferredQualityID = defaults.string(forKey: "playback.preferredQuality") ?? "auto"
         preferredAudioLanguage = defaults.string(forKey: "playback.preferredAudioLanguage")
+        subtitleMode = defaults.string(forKey: "playback.subtitleMode").flatMap(SubtitlePreferenceMode.init(rawValue:)) ?? .automatic
+        preferredSubtitleLanguage = defaults.string(forKey: "playback.preferredSubtitleLanguage")
     }
 
     func quality(in profiles: [QualityProfile]) -> PlaybackQualityResolution {
@@ -27,6 +35,14 @@ final class PlaybackPreferences: ObservableObject {
             if let track = item.audioTracks.first(where: { PlaybackLanguage.matches($0.language, language) }) { return track.index }
         }
         return item.defaultAudioIndex
+    }
+}
+
+enum SubtitlePreferenceMode: String, CaseIterable, Identifiable {
+    case automatic, always, off
+    var id: String { rawValue }
+    var label: String {
+        switch self { case .automatic: "Automatic"; case .always: "Always On"; case .off: "Off" }
     }
 }
 

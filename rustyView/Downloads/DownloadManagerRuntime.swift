@@ -9,6 +9,7 @@ final class DownloadManager: ObservableObject {
     @Published private(set) var completed: [DownloadRecord] = []
     @Published private(set) var preparationProgress: [UUID: DownloadPreparationProgress] = [:]
     @Published private(set) var isRestoring = true
+    @Published private(set) var revalidatingAssets: Set<UUID> = []
     @Published private(set) var storageRecoveryAvailable = false
     @Published private(set) var storageRetryAvailable = false
     @Published private(set) var totalStoredBytes: Int64 = 0
@@ -232,7 +233,8 @@ final class DownloadManager: ObservableObject {
     }
 
     func start(item: MediaItem, kind: DownloadKind, client: RustyDLNAClient, quality: String = "auto",
-               qualityProfile: QualityProfile? = nil, audioIndex: Int? = nil) throws {
+               qualityProfile: QualityProfile? = nil, audioIndex: Int? = nil,
+               preserveHDR: Bool = true, downloadAudio: DownloadAudioSelection? = nil) throws {
         guard let connection else { throw RustyDLNAError.notConfigured }
         guard storageIsReadable else { throw DownloadQueueError.invalidJournal }
         let path: String
@@ -245,7 +247,8 @@ final class DownloadManager: ObservableObject {
             // The server's status lookup can be scoped by movie/request alone.
             // Use the client's unique initial request identity so concurrent
             // renditions cannot observe another download or player's producer.
-            path = client.compatiblePath(for: item, delivery: "mp4", quality: quality, audioIndex: audioIndex)
+            path = client.compatiblePath(for: item, delivery: "mp4", quality: quality, audioIndex: audioIndex,
+                                         preserveHDR: preserveHDR, downloadAudio: downloadAudio)
         }
         _ = try client.authorizedRequest(serverPath: path)
         let audio = audioIndex ?? item.defaultAudioIndex
@@ -258,11 +261,15 @@ final class DownloadManager: ObservableObject {
             audioTrackLabel: kind == .compatible ? item.audioTracks.first { $0.index == audio }?.selectionLabel(defaultIndex: item.defaultAudioIndex) : nil,
             accountUsername: connection.username)
         metadata.attemptID = UUID()
+        metadata.videoOutput = kind == .compatible
+            ? CompatibleOutputPlan(item: item, quality: quality, audioIndex: audio, preserveHDR: preserveHDR).videoOutput : nil
+        metadata.downloadAudio = kind == .compatible ? downloadAudio : nil
         metadata.movie = MovieMetadata(item: item)
         guard !active.contains(where: { DownloadOwnership.sameRendition($0.metadata, metadata) }),
               !completed.contains(where: { connection.owns(serverIdentity: $0.serverOrigin, accountUsername: $0.accountUsername)
                   && $0.mediaID == item.id && $0.kind == kind && $0.isReadyToWatch
-                  && $0.qualityID == metadata.qualityID && $0.audioTrackIndex == metadata.audioTrackIndex }) else { return }
+                  && $0.qualityID == metadata.qualityID && $0.audioTrackIndex == metadata.audioTrackIndex
+                  && $0.videoOutput == metadata.videoOutput && $0.downloadAudio == metadata.downloadAudio }) else { return }
         let plan = OfflinePackagePlan(metadata: metadata, movie: MovieMetadata(item: item))
         var entry = DownloadQueueEntry(metadata: metadata)
         entry.packagePlan = plan
@@ -271,8 +278,8 @@ final class DownloadManager: ObservableObject {
         provisional[entry.id] = entry
         publish()
         let intent = entry
-        let estimate = DownloadOutputSummary.estimatedByteCount(item: item, kind: kind, quality: quality,
-                                                               profile: qualityProfile, audioIndex: audioIndex)
+        let estimate = kind == .compatible && downloadAudio != nil ? nil : DownloadOutputSummary.estimatedByteCount(
+            item: item, kind: kind, quality: quality, profile: qualityProfile, audioIndex: audioIndex)
         enqueueOperation { [weak self] in
             guard let self else { return }
             self.apply(try await self.storage.enqueue(intent))
@@ -333,9 +340,32 @@ final class DownloadManager: ObservableObject {
         }
     }
 
+    func retryVerification(_ record: DownloadRecord) {
+        guard record.assetInspection?.issue == .timedOut,
+              revalidatingAssets.insert(record.id).inserted else { return }
+        enqueueOperation { [weak self] in
+            guard let self else { return }
+            defer { self.revalidatingAssets.remove(record.id) }
+            self.apply(try await self.storage.revalidatePendingAssets(recordID: record.id))
+        }
+    }
+
     func retry(_ download: ActiveDownload) {
         enqueueOperation { [weak self] in
             guard let self, var entry = self.entry(download.id), entry.state == .failed else { return }
+            if entry.resources?.contains(where: { $0.verificationPending == true }) == true {
+                self.setVisiblePhase(entry.id, .finishing)
+                do { self.apply(try await self.storage.retryVerification(recordID: entry.id)) }
+                catch {
+                    self.apply(try await self.storage.snapshot())
+                    // The row owns this recoverable local failure; it must not
+                    // become a new network download or a global storage alert.
+                    if case DownloadStoreError.verificationTimedOut = error { return }
+                    try await self.failPackage(entry.id, message: error.localizedDescription, failure: UserFacingError(error))
+                }
+                try await self.schedule()
+                return
+            }
             guard DownloadOwnership.matches(entry.metadata, connection: self.connection) else {
                 entry.reason = DownloadQueueError.missingOwnership.localizedDescription
                 entry.failure = UserFacingError(DownloadQueueError.missingOwnership)
