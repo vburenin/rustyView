@@ -153,6 +153,8 @@ playback support varies.
 video bitrate limit, initially 1080p / 8 Mbps. It is independent of streaming
 quality. Smaller sources retain their dimensions. If the server cannot honor
 the limit, the app explains the problem before offering that copy.
+While a copy downloads, **Download details** shows **Up to** the saved maximum.
+Completed compatible copies show the dimensions inspected from the actual saved video.
 
 With a supporting rustyDLNA server, compatible downloads preserve supported
 audio and can include all audio tracks; unsupported audio becomes AAC with up

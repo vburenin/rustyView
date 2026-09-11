@@ -76,9 +76,15 @@ struct DownloadRecord: Codable, Identifiable, Hashable, Sendable {
     }
 
     var videoQualityDescription: String {
-        DownloadMetadataPresentation.videoQuality(
+        if kind == .compatible,
+           let width = assetInspection?.width, width > 0,
+           let height = assetInspection?.height, height > 0 {
+            return "Compatible · \(width)×\(height)"
+        }
+        return DownloadMetadataPresentation.videoQuality(
             kind: kind,
             sourceResolution: resolution,
+            qualityID: qualityID,
             qualityLabel: qualityLabel
         )
     }
@@ -119,6 +125,7 @@ struct DownloadTaskMetadata: Codable, Equatable, Sendable {
         DownloadMetadataPresentation.videoQuality(
             kind: kind,
             sourceResolution: resolution,
+            qualityID: qualityID,
             qualityLabel: qualityLabel
         )
     }
@@ -137,13 +144,16 @@ private enum DownloadMetadataPresentation {
     static func videoQuality(
         kind: DownloadKind,
         sourceResolution: String?,
+        qualityID: String?,
         qualityLabel: String?
     ) -> String {
         switch kind {
         case .original:
             return sourceResolution.map { "Original · \($0)" } ?? "Original quality"
         case .compatible:
-            return qualityLabel.map { "Compatible · \($0)" } ?? "Compatible quality"
+            guard let qualityLabel else { return "Compatible quality" }
+            if qualityID == "auto" || qualityLabel == "Auto" { return "Compatible · Auto" }
+            return "Compatible · Up to \(qualityLabel)"
         }
     }
 

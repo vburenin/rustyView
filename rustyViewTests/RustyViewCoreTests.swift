@@ -817,7 +817,11 @@ final class DownloadManifestStoreTests: XCTestCase {
         XCTAssertTrue(record.isReadyToWatch)
         XCTAssertEqual(record.fileName, "offline-\(metadata.recordID.uuidString.lowercased()).mp4")
         XCTAssertEqual(record.qualityID, "full_hd")
-        XCTAssertEqual(record.videoQualityDescription, "Compatible · 1080p · 8 Mbps")
+        XCTAssertEqual(metadata.videoQualityDescription, "Compatible · Up to 1080p · 8 Mbps")
+        XCTAssertEqual(record.assetInspection?.width, 96)
+        XCTAssertEqual(record.assetInspection?.height, 64)
+        XCTAssertEqual(record.videoQualityDescription, "Compatible · 96×64",
+                       "A completed copy must report its inspected dimensions, not the requested 1080p ceiling")
         XCTAssertEqual(record.audioTrackIndex, 2)
         XCTAssertEqual(record.audioSelectionDescription, "Commentary · AAC · Stereo")
         XCTAssertEqual(try store.load().records, [record])

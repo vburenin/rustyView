@@ -54,7 +54,9 @@ struct DownloadOutputSummary {
             switch plan.videoMode {
             case "copy": video = "MP4 · Source video and \(item.hdr.uppercased()) preserved."
             case "repair": video = "MP4 · Video repair may change quality or HDR."
-            default: video = "MP4 · \(plan.videoOutput == "hevc_hdr10" ? "HEVC HDR10" : "H.264 SDR") · \(profile?.label ?? "Auto")"
+            default:
+                let limit = quality != "auto" ? profile.map { "Up to \($0.label)" } : nil
+                video = "MP4 · \(plan.videoOutput == "hevc_hdr10" ? "HEVC HDR10" : "H.264 SDR") · \(limit ?? "Auto")"
             }
             let selected = item.audioTracks.first { $0.index == plan.audioIndex }
             let audioName = selected.flatMap { $0.displayName.uppercased() == "UND" ? nil : $0.displayName } ?? "Selected audio"

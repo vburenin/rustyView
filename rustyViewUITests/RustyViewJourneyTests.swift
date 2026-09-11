@@ -1168,7 +1168,7 @@ final class RustyViewJourneyTests: XCTestCase {
         let details = app.buttons["active-download-details"]
         reveal(details, in: app)
         details.tap()
-        XCTAssertEqual(app.staticTexts["active-download-quality"].label, "Quality: Compatible · 1080p · 8 Mbps")
+        XCTAssertEqual(app.staticTexts["active-download-quality"].label, "Quality: Compatible · Up to 1080p · 8 Mbps")
         app.buttons["Cancel Download"].tap()
     }
 
@@ -2367,7 +2367,8 @@ final class RustyViewJourneyTests: XCTestCase {
         savedDetails.tap()
         XCTAssertEqual(
             app.staticTexts["active-download-quality"].label,
-            "Quality: Compatible · 1080p · 8 Mbps"
+            "Quality: Compatible · 640×360",
+            "The saved file's dimensions must survive relaunch without claiming the selected 1080p maximum"
         )
         XCTAssertEqual(
             app.staticTexts["active-download-audio"].label,
@@ -2678,7 +2679,7 @@ final class RustyViewJourneyTests: XCTestCase {
         downloadDetails.tap()
         XCTAssertEqual(
             app.staticTexts["active-download-quality"].label,
-            "Quality: Compatible · 1080p · 8 Mbps"
+            "Quality: Compatible · Up to 1080p · 8 Mbps"
         )
         XCTAssertEqual(
             app.staticTexts["active-download-audio"].label,
