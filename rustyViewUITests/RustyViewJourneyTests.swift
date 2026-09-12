@@ -87,6 +87,46 @@ final class RustyViewJourneyTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Paper Voyage 0001"].waitForExistence(timeout: 5))
     }
 
+    func testSearchKeepsTypingWhilePosterTransfersAreHeldAndReleased() throws {
+        let fixture = try XCTUnwrap(server)
+        fixture.useLongSearchFixture()
+        try fixture.useLargePosterBenchmarkFixture()
+        fixture.beginLargePosterIteration(namespace: UUID().uuidString)
+        fixture.holdLargePosters(true)
+        let app = try launchApp()
+        XCTAssertTrue(app.staticTexts["Paper Voyage 0001"].waitForExistence(timeout: 8))
+        let postersHeld = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fixture.heldLargePosterCount == 4
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [postersHeld], timeout: 5), .completed)
+        let search = app.searchFields["Search movies"]
+        search.tap()
+        search.typeText("Paper")
+        XCTAssertEqual(search.value as? String, "Paper")
+        let requestWhilePostersWait = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fixture.searchQueries.contains("Paper")
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [requestWhilePostersWait], timeout: 4), .completed,
+                       "Artwork transfers must not occupy the search request or native input path")
+        fixture.holdLargePosters(false)
+        search.typeText(" Voyage 001")
+        XCTAssertEqual(search.value as? String, "Paper Voyage 001")
+        let latest = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fixture.searchQueries.contains("Paper Voyage 001")
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [latest], timeout: 4), .completed)
+        fixture.releaseSearchResponses()
+        XCTAssertTrue(app.staticTexts["Paper Voyage 0010"].waitForExistence(timeout: 5))
+        search.typeText(XCUIKeyboardKey.delete.rawValue + "2")
+        XCTAssertEqual(search.value as? String, "Paper Voyage 002")
+        let replaced = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fixture.searchQueries.contains("Paper Voyage 002")
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [replaced], timeout: 4), .completed)
+        fixture.releaseSearchResponses()
+        XCTAssertTrue(app.staticTexts["Paper Voyage 0020"].waitForExistence(timeout: 5))
+    }
+
     func testEmbeddedCaptionIsActuallyRenderedAndOffRemovesItsPixels() throws {
         let server = try XCTUnwrap(server)
         server.useNativeCaptionFixture()
@@ -3440,6 +3480,21 @@ private final class SyntheticHTTPServer {
     private var largePosterData: Data?
     private var largePosterNamespace = ""
     private var storedLargePosterIDs: Set<String> = []
+    private var largePostersHeld = false
+    private var heldLargePosters: [(Data, String, NWConnection)] = []
+    var heldLargePosterCount: Int { queue.sync { heldLargePosters.count } }
+    func holdLargePosters(_ held: Bool) {
+        queue.sync {
+            largePostersHeld = held
+            if !held {
+                let pending = heldLargePosters
+                heldLargePosters = []
+                for (image, method, connection) in pending {
+                    send(image, contentType: "image/jpeg", method: method, connection: connection)
+                }
+            }
+        }
+    }
 
     private let queue = DispatchQueue(label: "rustyView-ui-http")
     private let ready = DispatchSemaphore(value: 0)
@@ -3846,6 +3901,8 @@ private final class SyntheticHTTPServer {
             heldBrowseResponses = []
             for (_, _, connection) in heldSearchResponses { connection.cancel() }
             heldSearchResponses = []
+            for (_, _, connection) in heldLargePosters { connection.cancel() }
+            heldLargePosters = []
         }
         listener.cancel()
     }
@@ -4195,7 +4252,7 @@ private final class SyntheticHTTPServer {
                   target.hasSuffix(".jpg") {
             let fileName = String(target.split(separator: "/").last ?? "")
             let id = String(fileName.dropLast(4))
-            guard Set((0..<36).map { String(81000 + $0) }).contains(id) else {
+            guard Set((0..<(longSearchFixture ? 720 : 36)).map { String(81000 + $0) }).contains(id) else {
                 send(Data(), status: 404, contentType: "image/jpeg", method: method, connection: connection)
                 return
             }
@@ -4204,6 +4261,10 @@ private final class SyntheticHTTPServer {
             storedArtworkRequestCount += 1
             storedLargePosterIDs.insert(id)
             countLock.unlock()
+            if largePostersHeld {
+                heldLargePosters.append((image, method, connection))
+                return
+            }
             send(image, contentType: "image/jpeg", method: method, connection: connection)
             return
 
