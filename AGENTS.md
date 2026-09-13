@@ -599,13 +599,36 @@ or otherwise explain the concrete fault it detects. A test double may replace a
 remote system, but it must preserve the relevant HTTP, concurrency, or failure
 semantics instead of returning a prearranged value directly to the assertion.
 
-Every material change should run the narrowest relevant checks and then the
-project-level gate. At minimum:
+Default to focused verification around the changed functionality and directly
+affected behavior. Run the relevant unit or integration tests, and focused UI
+journeys when the change affects user interaction or presentation. Include a
+regression test for a bug fix where it can prove the reported failure. Once the
+relevant checks pass, stop testing unless new changes, failures, or unresolved
+concerns justify additional checks. A localized fix does not require unrelated
+feature, accessibility, font-matrix, or performance suites.
+
+Build the app for app-code changes. Run `xcodegen generate` when targets,
+resources, or build settings change. Documentation-only edits need a content
+and diff review, not an app build or test run. For focused tests, replace the
+selection below with the relevant test target, class, or method; repeat
+`-only-testing` for additional affected tests:
 
 ```sh
-xcodegen generate
 xcodebuild -project rustyView.xcodeproj -scheme rustyView \
   -destination 'generic/platform=iOS Simulator' build
+xcodebuild -project rustyView.xcodeproj -scheme rustyView \
+  -destination 'platform=iOS Simulator,name=rustyView Test iPhone' \
+  -only-testing:TEST_TARGET/TEST_CLASS/TEST_METHOD test
+```
+
+Run the full suite for core or fundamental changes with broad impact, such as
+changes to shared app architecture, authentication or request ownership,
+persistence schemas, or the central playback/download state machines. Judge
+the scope by the behavioral impact, not merely by whether a core file was
+edited. Also run the full suite when the user explicitly requests it. For these
+changes, run focused checks first, then the full suite:
+
+```sh
 xcodebuild -project rustyView.xcodeproj -scheme rustyView \
   -destination 'platform=iOS Simulator,name=rustyView Test iPhone' test
 ```

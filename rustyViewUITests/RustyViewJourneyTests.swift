@@ -1871,6 +1871,59 @@ final class RustyViewJourneyTests: XCTestCase {
                        "Restored copy management and the recovered compatible file must work without contacting the server")
     }
 
+    func testDownloadCompletionUpdatesWatchOnOpenDetailsAndPreservesExplicitOnlineChoice() throws {
+        let server = try XCTUnwrap(server)
+        server.useOfflineTracksFixture()
+        server.setCompatibleDownloadDelay(2)
+        let app = try launchApp()
+        let title = app.staticTexts["The Clockwork Orchard"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 8))
+        title.tap()
+        let download = app.buttons["Download"]
+        XCTAssertTrue(download.waitForExistence(timeout: 5))
+        reveal(download, in: app)
+        download.tap()
+
+        let savedCopy = app.descendants(matching: .any).matching(identifier: "offline-copy-available").firstMatch
+        XCTAssertTrue(savedCopy.waitForExistence(timeout: 35))
+        let requestsBeforeWatch = server.requestCount
+        let watch = app.buttons.matching(NSPredicate(
+            format: "label == 'Watch' OR label == 'Watch Offline' OR label BEGINSWITH 'Resume at '"
+        )).firstMatch
+        reveal(watch, in: app)
+        watch.tap()
+        let timeline = app.descendants(matching: .any).matching(identifier: "player-time-label").firstMatch
+        _ = try waitForElapsedSeconds(in: timeline, atLeast: 2, timeout: 12, revealingControlsIn: app)
+        XCTAssertEqual(server.requestCount, requestsBeforeWatch,
+                       "Watch on the page where the download finished must play the saved media without HTTP")
+        showPlayerControls(in: app)
+        app.buttons["Close player"].tap()
+
+        // A later download must not override an explicit online source or its
+        // selected quality/audio. Stay on this same detail page throughout.
+        let source = app.segmentedControls["detail-playback-source"]
+        XCTAssertTrue(source.buttons["On This Device"].isSelected)
+        source.buttons["Online"].tap()
+        XCTAssertTrue(app.buttons["Quality"].waitForExistence(timeout: 5))
+        app.buttons["Quality"].tap()
+        app.buttons["1080p · 8 Mbps"].tap()
+        app.buttons["Audio"].tap()
+        app.buttons.matching(NSPredicate(format: "label CONTAINS 'French tone'")).firstMatch.tap()
+        downloadOriginal(in: app)
+        let originalSaved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            server.originalDownloadRequestCount == 1 && savedCopy.exists && !app.buttons["Cancel Download"].exists
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [originalSaved], timeout: 35), .completed)
+        XCTAssertTrue(source.buttons["Online"].isSelected,
+                      "A completed second copy must preserve the user's explicit online source")
+        reveal(watch, in: app)
+        watch.tap()
+        _ = try waitForElapsedSeconds(in: timeline, atLeast: 3, timeout: 12, revealingControlsIn: app)
+        let outgoing = try XCTUnwrap(server.preparedRequests.last)
+        XCTAssertEqual(outgoing.quality, "full_hd")
+        XCTAssertEqual(outgoing.audio, "12")
+    }
+
     func testDisconnectedRelaunchOpensOwnedDetailsAndPlaysAlternateAudioCaptionsAndChapterWithoutHTTP() throws {
         let server = try XCTUnwrap(server)
         server.useOfflineTracksFixture()

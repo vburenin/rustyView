@@ -13,6 +13,7 @@ struct MovieDetailView: View {
     @State private var movie: MovieMetadata
     @State private var localRecord: DownloadRecord?
     @State private var viewingOnline = false
+    @State private var hasExplicitOnlineSource = false
     @State private var loadedConnection: ServerConnection?
     @State private var loadedQualityProfiles: [QualityProfile]?
     @State private var loadedCapabilities: ServerCapabilities?
@@ -71,7 +72,7 @@ struct MovieDetailView: View {
         .onChange(of: app.playbackPreferences.preferredQualityID) { _, _ in resolveQualityPreference() }
         .onChange(of: app.downloads.completed) { _, records in
             if let deletingRecordID, !records.contains(where: { $0.id == deletingRecordID }) { dismiss() }
-            if let current = localRecord, let updated = records.first(where: { $0.id == current.id }) { localRecord = updated }
+            refreshLocalSource()
         }
         .sheet(isPresented: Binding(
             get: { managingCopies != nil }, set: { if !$0 { managingCopies = nil } }
@@ -628,6 +629,7 @@ struct MovieDetailView: View {
         loadRequest = UUID()
         let request = loadRequest
         viewingOnline = online
+        hasExplicitOnlineSource = online
         errorMessage = nil
         loadError = nil
         if online {
@@ -637,6 +639,23 @@ struct MovieDetailView: View {
             }
         }
         else if let localRecord { movie = localRecord.movieMetadata; isLoading = false }
+    }
+
+    private func refreshLocalSource() {
+        let hadReadyCopy = localRecord?.isReadyToWatch == true
+        let key = localRecord.map { app.key(for: $0) }
+            ?? loadedConnection.map { MovieLibraryKey(connection: $0, mediaID: mediaID) }
+        if let current = localRecord,
+           let updated = app.downloads.completed.first(where: { $0.id == current.id }) {
+            localRecord = updated
+            if !viewingOnline { movie = updated.movieMetadata }
+        }
+        // An open page follows the same local-first default as a newly opened
+        // page once its first playable copy is installed. Preserve an explicit
+        // Online choice, and match the detail's captured account, not a new login.
+        guard !hadReadyCopy, let key, let readyCopy = app.bestReadyRecord(for: key) else { return }
+        localRecord = readyCopy
+        if !hasExplicitOnlineSource { chooseSource(false) }
     }
 
     private func resolveInitialSource() async {
@@ -703,6 +722,9 @@ struct MovieDetailView: View {
             loadedCapabilities = capabilities
             selectedAudio = app.playbackPreferences.audioIndex(in: loaded)
             resolveQualityPreference()
+            // Installation can finish while the initial metadata request is
+            // still loading, before this page has captured its online owner.
+            refreshLocalSource()
         } catch is CancellationError {
             return
         } catch {
