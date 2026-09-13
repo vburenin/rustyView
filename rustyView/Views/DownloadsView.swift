@@ -331,7 +331,7 @@ private struct ActiveDownloadRow: View {
         case .waiting(.credentials):
             Button { showingConnection = true } label: { actionLabel("Reconnect", icon: "person.crop.circle") }
                 .buttonStyle(.borderless)
-        case .queued, .downloading, .waiting:
+        case .queued, .preparing, .downloading, .waiting:
             Button { app.downloads.pause(download) } label: { actionLabel("Pause", icon: "pause.fill") }
                 .buttonStyle(.borderless)
                 .accessibilityLabel("Pause download of \(download.displayTitle)")
@@ -351,6 +351,9 @@ private struct ActiveDownloadRow: View {
         case .queued:
             if let preparation = progressPresentation.activePreparation { preparationText(preparation) }
             else { Text("Queued") }
+        case .preparing:
+            if let preparation = progressPresentation.activePreparation { preparationText(preparation) }
+            else { Text("Preparing…") }
         case .pausing: Text("Pausing…")
         case .cancelling: Text("Cancelling…")
         case .paused: Text("Paused")
@@ -393,7 +396,7 @@ private struct ActiveDownloadRow: View {
 
     private var canPause: Bool {
         switch download.phase {
-        case .queued, .downloading, .retrying, .waiting: true
+        case .queued, .preparing, .downloading, .retrying, .waiting: true
         case .pausing, .cancelling, .paused, .finishing, .failed: false
         }
     }
@@ -402,6 +405,7 @@ private struct ActiveDownloadRow: View {
     private var phaseAnnouncement: String {
         switch download.phase {
         case .queued: "Queued"
+        case .preparing: "Preparing download"
         case .pausing: "Saving download progress"
         case .cancelling: "Cancelling download"
         case .paused: "Download paused"
@@ -463,6 +467,7 @@ private struct DownloadedRow: View {
             case .waiting(.credentials): parts.append("Sign in to finish copy")
             case .waiting(.wifi): parts.append("Waiting for Wi-Fi")
             case .queued, .waiting, .retrying: parts.append("Copy queued")
+            case .preparing: parts.append("Preparing copy")
             case .pausing: parts.append("Pausing copy")
             case .cancelling: parts.append("Cancelling copy")
             case .downloading: parts.append("Downloading copy")

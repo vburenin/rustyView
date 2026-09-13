@@ -6,6 +6,184 @@ import XCTest
 
 @MainActor
 final class DownloadResumeTests: XCTestCase {
+    func testGrowingPrefixSurvivesPauseRelaunchAndCompletesWithoutDownloadingItAgain() async throws {
+        let fixture = try await context()
+        defer { fixture.server.stop(); try? FileManager.default.removeItem(at: fixture.root) }
+        fixture.server.publishPrefix(fixture.server.payload.count, complete: false)
+        var manager: DownloadManager? = fixture.manager()
+        manager?.configure(connection: fixture.owner)
+        try manager?.start(item: fixture.item, kind: .compatible, client: fixture.client)
+        let queue = DownloadQueueStore(rootDirectory: fixture.root)
+        try await waitUntil { (try? queue.load().entries.first?.resources?.first?.partial?.byteCount) == Int64(fixture.server.payload.count) }
+        XCTAssertTrue(manager?.completed.isEmpty == true)
+        manager?.pause(try XCTUnwrap(manager?.active.first))
+        await manager?.waitForPendingOperations()
+        let retained = try XCTUnwrap(queue.load().entries.first)
+        manager = nil
+        fixture.server.publishPrefix(fixture.server.payload.count, complete: true)
+        let reopened = fixture.manager()
+        await reopened.waitForPendingOperations()
+        reopened.configure(connection: fixture.owner)
+        reopened.resume(try XCTUnwrap(reopened.active.first))
+        try await waitUntil { reopened.completed.count == 1 }
+        let record = try XCTUnwrap(reopened.completed.first)
+        XCTAssertEqual(try Data(contentsOf: reopened.localURL(for: record)), fixture.server.payload)
+        XCTAssertEqual(fixture.server.sentBytes, fixture.server.payload.count)
+        XCTAssertEqual(try queue.load().entries.first?.metadata.attemptID, retained.metadata.attemptID)
+        XCTAssertEqual(try queue.load().entries.first?.metadata.serverPath, retained.metadata.serverPath)
+    }
+
+    func testGrowingDownloadKeepsReceivingAndResumesAfterInterruptionBeforePreparationFinishes() async throws {
+        let fixture = try await context()
+        defer { fixture.server.stop(); try? FileManager.default.removeItem(at: fixture.root) }
+        let megabyte = 1_024 * 1_024
+        fixture.server.publishPrefix(2 * megabyte, complete: false)
+        let manager = fixture.manager()
+        manager.configure(connection: fixture.owner)
+        try manager.start(item: fixture.item, kind: .compatible, client: fixture.client)
+        let queue = DownloadQueueStore(rootDirectory: fixture.root)
+        try await waitUntil { (try? queue.load().entries.first?.resources?.first?.partial?.byteCount) == Int64(2 * megabyte) }
+        XCTAssertTrue(manager.completed.isEmpty, "An available growing prefix must never become Ready to Watch")
+        fixture.server.interruptAfter(4 * megabyte)
+        fixture.server.publishPrefix(6 * megabyte, complete: false)
+        try await waitUntil { (try? queue.load().entries.first?.resources?.first?.partial?.byteCount) == Int64(6 * megabyte) }
+        XCTAssertTrue(manager.completed.isEmpty, "Recovery must keep downloading while preparation is still incomplete")
+        try await waitUntil { Self.received(manager) >= Int64(6 * megabyte) }
+        XCTAssertEqual(try queue.load().entries.first?.metadata.retryAttempt, 0,
+                       "A committed range ends transport backoff; the next range must show retained byte progress")
+        XCTAssertTrue(fixture.server.requests.contains { ($0.rangeStart ?? 0) > 3 * megabyte },
+                      "Native recovery must resume inside the interrupted range, in addition to retaining earlier committed ranges")
+        fixture.server.publishPrefix(fixture.server.payload.count, complete: true)
+        try await waitUntil { manager.completed.count == 1 }
+        let record = try XCTUnwrap(manager.completed.first)
+        XCTAssertEqual(try Data(contentsOf: manager.localURL(for: record)), fixture.server.payload)
+        XCTAssertLessThan(fixture.server.sentBytes, fixture.server.payload.count + 512 * 1_024)
+    }
+
+    func testConnectionLossAutomaticallyResumesAtReceivedOffset() async throws {
+        let fixture = try await context()
+        defer { fixture.server.stop(); try? FileManager.default.removeItem(at: fixture.root) }
+        fixture.server.interruptAfter(4 * 1_024 * 1_024)
+        let manager = fixture.manager()
+        manager.configure(connection: fixture.owner)
+        try manager.start(item: fixture.item, kind: .original, client: fixture.client)
+        try await waitUntil { manager.completed.count == 1 }
+        XCTAssertTrue(fixture.server.requests.contains { ($0.rangeStart ?? 0) >= 3 * 1_024 * 1_024 },
+                      "A broken connection must recover the native partial file using a nonzero HTTP Range")
+        XCTAssertLessThan(fixture.server.sentBytes, fixture.server.payload.count + 512 * 1_024)
+        let record = try XCTUnwrap(manager.completed.first)
+        XCTAssertEqual(try Data(contentsOf: manager.localURL(for: record)), fixture.server.payload)
+    }
+
+    func testCompatiblePreparationThenConnectionLossResumesWithoutRestarting() async throws {
+        let fixture = try await context()
+        defer { fixture.server.stop(); try? FileManager.default.removeItem(at: fixture.root) }
+        fixture.server.changeBehavior(.preparing)
+        fixture.server.interruptAfter(4 * 1_024 * 1_024)
+        let manager = fixture.manager()
+        manager.configure(connection: fixture.owner)
+        try manager.start(item: fixture.item, kind: .compatible, client: fixture.client)
+        try await waitUntil { manager.completed.count == 1 }
+        XCTAssertTrue(fixture.server.requests.contains { $0.resumableDownload },
+                      "Compatible downloads must request finalized, validator-backed delivery")
+        XCTAssertTrue(fixture.server.requests.contains { ($0.rangeStart ?? 0) >= 3 * 1_024 * 1_024 })
+        XCTAssertLessThan(fixture.server.sentBytes, fixture.server.payload.count + 512 * 1_024)
+        let record = try XCTUnwrap(manager.completed.first)
+        XCTAssertEqual(try Data(contentsOf: manager.localURL(for: record)), fixture.server.payload)
+    }
+
+    func testRetryAfterRelaunchKeepsNativeBytesAndPreparedGeneration() async throws {
+        let fixture = try await context()
+        defer { fixture.server.stop(); try? FileManager.default.removeItem(at: fixture.root) }
+        var manager: DownloadManager? = fixture.manager()
+        manager?.configure(connection: fixture.owner)
+        try manager?.start(item: fixture.item, kind: .compatible, client: fixture.client)
+        try await waitUntil { Self.received(manager) > 4 * 1_024 * 1_024 }
+        manager?.pause(try XCTUnwrap(manager?.active.first))
+        await manager?.waitForPendingOperations()
+        let queue = DownloadQueueStore(rootDirectory: fixture.root)
+        var entry = try XCTUnwrap(queue.load().entries.first)
+        XCTAssertNotNil(entry.resources?.first?.resumeReference)
+        // Reproduce the durable exhausted-retry boundary using a real native
+        // partial file and encrypted archive, not a fabricated resume payload.
+        entry.state = .failed
+        entry.resources?[0].state = .failed
+        entry.resources?[0].retryAttempt = DownloadRetryPolicy.maximumAttempts
+        entry.metadata.retryAttempt = DownloadRetryPolicy.maximumAttempts
+        try queue.update(entry)
+        manager = nil
+        let reopened = fixture.manager()
+        await reopened.waitForPendingOperations()
+        reopened.configure(connection: fixture.owner)
+        reopened.retry(try XCTUnwrap(reopened.active.first))
+        await reopened.waitForPendingOperations()
+        let retry = try XCTUnwrap(queue.load().entries.first)
+        XCTAssertEqual(retry.metadata.attemptID, entry.metadata.attemptID)
+        XCTAssertEqual(retry.metadata.serverPath, entry.metadata.serverPath)
+        try await waitUntil { reopened.completed.count == 1 }
+        XCTAssertTrue(fixture.server.requests.contains { ($0.rangeStart ?? 0) >= 3 * 1_024 * 1_024 })
+        XCTAssertLessThan(fixture.server.sentBytes, fixture.server.payload.count + 512 * 1_024)
+        let record = try XCTUnwrap(reopened.completed.first)
+        XCTAssertEqual(try Data(contentsOf: reopened.localURL(for: record)), fixture.server.payload)
+    }
+
+    func testPreparationSurvivesPauseRelaunchWithoutConsumingFailureBudget() async throws {
+        let fixture = try await context()
+        defer { fixture.server.stop(); try? FileManager.default.removeItem(at: fixture.root) }
+        fixture.server.prepareForRequests(8)
+        var manager: DownloadManager? = fixture.manager()
+        manager?.configure(connection: fixture.owner)
+        try manager?.start(item: fixture.item, kind: .compatible, client: fixture.client)
+        try await waitUntil { fixture.server.requests.count >= 7 && manager?.active.first?.phase == .preparing }
+        XCTAssertEqual(fixture.server.sentBytes, 0)
+        XCTAssertTrue(manager?.completed.isEmpty == true)
+        manager?.pause(try XCTUnwrap(manager?.active.first))
+        await manager?.waitForPendingOperations()
+        let queue = DownloadQueueStore(rootDirectory: fixture.root)
+        let saved = try XCTUnwrap(queue.load().entries.first)
+        XCTAssertEqual(saved.metadata.retryAttempt, 0)
+        XCTAssertEqual(saved.resources?.first?.retryAttempt, 0)
+        XCTAssertEqual(saved.state, .paused)
+        manager = nil
+        fixture.server.changeBehavior(.ranges)
+        let reopened = fixture.manager()
+        await reopened.waitForPendingOperations()
+        reopened.configure(connection: fixture.owner)
+        reopened.resume(try XCTUnwrap(reopened.active.first))
+        try await waitUntil { reopened.completed.count == 1 }
+        let completed = try XCTUnwrap(queue.load().entries.first)
+        XCTAssertEqual(completed.metadata.serverPath, saved.metadata.serverPath)
+        XCTAssertEqual(completed.metadata.attemptID, saved.metadata.attemptID)
+        let record = try XCTUnwrap(reopened.completed.first)
+        XCTAssertEqual(try Data(contentsOf: reopened.localURL(for: record)), fixture.server.payload)
+    }
+
+    func testTemporarilyUnavailableResumeKeyKeepsBytesForRetry() async throws {
+        let fixture = try await context()
+        defer { fixture.server.stop(); try? FileManager.default.removeItem(at: fixture.root) }
+        let manager = fixture.manager()
+        manager.configure(connection: fixture.owner)
+        try manager.start(item: fixture.item, kind: .original, client: fixture.client)
+        try await waitUntil { Self.received(manager) > 4 * 1_024 * 1_024 }
+        manager.pause(try XCTUnwrap(manager.active.first))
+        await manager.waitForPendingOperations()
+        let queue = DownloadQueueStore(rootDirectory: fixture.root)
+        let saved = try XCTUnwrap(queue.load().entries.first?.resources?.first?.resumeReference)
+        fixture.secrets.rejectReads(true)
+        manager.resume(try XCTUnwrap(manager.active.first))
+        await manager.waitForPendingOperations()
+        let failed = try XCTUnwrap(queue.load().entries.first)
+        XCTAssertEqual(failed.state, .failed)
+        XCTAssertEqual(failed.resources?.first?.resumeReference, saved)
+        XCTAssertEqual(fixture.server.requests.count, 1, "A temporarily locked key must not silently discard the partial download")
+        fixture.secrets.rejectReads(false)
+        manager.retry(try XCTUnwrap(manager.active.first))
+        try await waitUntil { manager.completed.count == 1 }
+        XCTAssertTrue(fixture.server.requests.contains { ($0.rangeStart ?? 0) >= 3 * 1_024 * 1_024 })
+        let record = try XCTUnwrap(manager.completed.first)
+        XCTAssertEqual(try Data(contentsOf: manager.localURL(for: record)), fixture.server.payload)
+    }
+
     func testUnavailableKeychainDuringNativePauseOrPolicyChangeKeepsActionableDurableIntent() async throws {
         for userInitiated in [true, false] {
             let fixture = try await context()
@@ -245,9 +423,15 @@ private final class ResumeTestSecrets: SecretStoring, @unchecked Sendable {
     private var values: [String: String] = [:]
     private var rejects = false
     private var rejected = 0
+    private var readsUnavailable = false
     var rejectedWrites: Int { lock.lock(); defer { lock.unlock() }; return rejected }
     func rejectWrites(_ value: Bool) { lock.lock(); rejects = value; lock.unlock() }
-    func read(account: String) throws -> String? { lock.lock(); defer { lock.unlock() }; return values[account] }
+    func rejectReads(_ value: Bool) { lock.lock(); readsUnavailable = value; lock.unlock() }
+    func read(account: String) throws -> String? {
+        lock.lock(); defer { lock.unlock() }
+        if readsUnavailable { throw KeychainError.unexpectedStatus(errSecInteractionNotAllowed) }
+        return values[account]
+    }
     func write(_ value: String, account: String) throws {
         lock.lock()
         defer { lock.unlock() }
@@ -258,8 +442,8 @@ private final class ResumeTestSecrets: SecretStoring, @unchecked Sendable {
 }
 
 private final class ResumeHTTPServer: @unchecked Sendable {
-    enum Behavior { case ranges, changedValidator, ignoreRange, growingSnapshot }
-    struct Request { let rangeStart: Int?; let authorization: String? }
+    enum Behavior { case ranges, changedValidator, ignoreRange, growingSnapshot, preparing, progressive }
+    struct Request { let rangeStart: Int?; let authorization: String?; let resumableDownload: Bool }
     let payload: Data
     private let listener: NWListener
     private let queue = DispatchQueue(label: "resume-tests.http")
@@ -267,6 +451,10 @@ private final class ResumeHTTPServer: @unchecked Sendable {
     private var behavior: Behavior = .ranges
     private var captured: [Request] = []
     private var transferred = 0
+    private var interruptionOffset: Int?
+    private var preparationReplies = 1
+    private var availableBytes = 0
+    private var preparationComplete = false
     private var connections: [NWConnection] = []
     var requests: [Request] { lock.lock(); defer { lock.unlock() }; return captured }
     var sentBytes: Int { lock.lock(); defer { lock.unlock() }; return transferred }
@@ -287,6 +475,18 @@ private final class ResumeHTTPServer: @unchecked Sendable {
         listener = try NWListener(using: .tcp, on: .any)
     }
     func changeBehavior(_ behavior: Behavior) { lock.lock(); defer { lock.unlock() }; self.behavior = behavior }
+    func interruptAfter(_ offset: Int) { lock.lock(); defer { lock.unlock() }; interruptionOffset = offset }
+    func publishPrefix(_ bytes: Int, complete: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        behavior = .progressive
+        availableBytes = bytes
+        preparationComplete = complete
+    }
+    func prepareForRequests(_ count: Int) {
+        lock.lock(); defer { lock.unlock() }
+        behavior = .preparing
+        preparationReplies = count
+    }
     func start() async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             listener.stateUpdateHandler = { [weak self] state in
@@ -334,26 +534,67 @@ private final class ResumeHTTPServer: @unchecked Sendable {
             lines.first { $0.lowercased().hasPrefix(name.lowercased() + ":") }?
                 .split(separator: ":", maxSplits: 1).last?.trimmingCharacters(in: .whitespaces)
         }
+        let requestLine = lines.first?.split(separator: " ") ?? []
+        if requestLine.count > 1, requestLine[1].hasPrefix("/api/") {
+            connection.send(content: Data("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8),
+                            completion: .contentProcessed { _ in connection.cancel() })
+            return
+        }
+        let head = requestLine.first == "HEAD"
         let start = header("Range")?.replacingOccurrences(of: "bytes=", with: "").split(separator: "-").first.flatMap { Int($0) }
         lock.lock()
-        captured.append(Request(rangeStart: start, authorization: header("Authorization")))
+        let resumableDownload = ["resumable", "progressive"].contains(header("X-RustyDLNA-Download"))
+        if !head { captured.append(Request(rangeStart: start, authorization: header("Authorization"), resumableDownload: resumableDownload)) }
         let behavior = behavior
         let body = data(for: behavior)
+        let available = availableBytes
+        let complete = preparationComplete
+        if behavior == .preparing && resumableDownload && !head {
+            preparationReplies -= 1
+            if preparationReplies == 0 { self.behavior = .ranges }
+        }
         lock.unlock()
+        if behavior == .progressive && complete && (start ?? 0) >= available {
+            let response = "HTTP/1.1 416 Requested Range Not Satisfiable\r\nContent-Range: bytes */\(available)\r\nETag: \"synthetic-v1\"\r\nX-RustyDLNA-Download: progressive\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
+            return
+        }
+        if (behavior == .preparing && resumableDownload) || (behavior == .progressive && (start ?? 0) >= available) {
+            let response = "HTTP/1.1 202 Accepted\r\nX-RustyDLNA-Download: preparing\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
+            return
+        }
         let validator = behavior == .changedValidator ? "\"synthetic-v2\"" : "\"synthetic-v1\""
+        if behavior == .progressive {
+            let offset = max(0, start ?? 0)
+            let total = complete ? String(body.count) : "*"
+            let response = "HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\nAccept-Ranges: bytes\r\nETag: \(validator)\r\nContent-Range: bytes \(offset)-\(available - 1)/\(total)\r\nContent-Length: \(available - offset)\r\nX-RustyDLNA-Download: progressive\r\nConnection: close\r\n\r\n"
+            connection.send(content: Data(response.utf8), completion: .contentProcessed { [weak self] error in
+                guard error == nil, !head else { connection.cancel(); return }
+                self?.send(connection, body: Data(body.prefix(available)), offset: offset)
+            })
+            return
+        }
         let honorsRange = behavior != .ignoreRange && (header("If-Range") == nil || header("If-Range") == validator)
         let offset = honorsRange ? min(max(0, start ?? 0), body.count - 1) : 0
         let ranged = (start != nil && honorsRange) || behavior == .growingSnapshot
         let total = behavior == .growingSnapshot ? "*" : String(body.count)
         let rangeHeader = ranged ? "Content-Range: bytes \(offset)-\(body.count - 1)/\(total)\r\n" : ""
-        let response = "HTTP/1.1 \(ranged ? 206 : 200) Synthetic\r\nContent-Type: video/mp4\r\nAccept-Ranges: bytes\r\nETag: \(validator)\r\n\(rangeHeader)Content-Length: \(body.count - offset)\r\nConnection: close\r\n\r\n"
+        // Match the server's old growing response: no validator or final length.
+        let fileHeaders = behavior == .preparing ? "" : "Accept-Ranges: bytes\r\nETag: \(validator)\r\nContent-Length: \(body.count - offset)\r\n"
+        let response = "HTTP/1.1 \(ranged ? 206 : 200) Synthetic\r\nContent-Type: video/mp4\r\n\(rangeHeader)\(fileHeaders)Connection: close\r\n\r\n"
         connection.send(content: Data(response.utf8), completion: .contentProcessed { [weak self] error in
-            guard error == nil else { connection.cancel(); return }
+            guard error == nil, !head else { connection.cancel(); return }
             self?.send(connection, body: body, offset: offset)
         })
     }
     private func send(_ connection: NWConnection, body: Data, offset: Int) {
         guard offset < body.count else { connection.cancel(); return }
+        lock.lock()
+        let interrupt = interruptionOffset.map { offset >= $0 } == true
+        if interrupt { interruptionOffset = nil }
+        lock.unlock()
+        if interrupt { connection.forceCancel(); return }
         let end = min(offset + 16 * 1_024, body.count)
         connection.send(content: body.subdata(in: offset..<end), completion: .contentProcessed { [weak self] error in
             guard let self, error == nil else { connection.cancel(); return }

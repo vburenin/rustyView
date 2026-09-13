@@ -8,6 +8,7 @@ struct DownloadReceipt: Codable, Equatable, Sendable, Identifiable {
     let directoryName: String
     let expectedByteCount: Int64?
     var assetInspection: DownloadAssetInspection? = nil
+    var byteRange: DownloadRangeReceipt? = nil
 }
 
 struct DownloadFileTransaction: Codable, Equatable, Sendable, Identifiable {

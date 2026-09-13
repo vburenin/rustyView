@@ -2,7 +2,7 @@ import Foundation
 import ImageIO
 
 enum DownloadStorageBoundary: String, Sendable {
-    case receiptWritten, mediaStaged, transactionWritten, packageMoved, indexCommitted, deleteMoved, deleteCommitted
+    case receiptWritten, mediaStaged, rangeAppended, rangeCommitted, transactionWritten, packageMoved, indexCommitted, deleteMoved, deleteCommitted
 }
 
 enum DownloadStorageFailure: LocalizedError {
@@ -43,10 +43,10 @@ actor DownloadStorageCoordinator {
 
     nonisolated func stageTemporaryFile(
         temporaryURL: URL, metadata: DownloadTaskMetadata, resourceID: String = "video",
-        transferID: UUID? = nil, expectedByteCount: Int64? = nil
+        transferID: UUID? = nil, expectedByteCount: Int64? = nil, byteRange: DownloadRangeReceipt? = nil
     ) throws -> DownloadReceipt {
         try ingress.stage(temporaryURL: temporaryURL, metadata: metadata, resourceID: resourceID,
-                          transferID: transferID, expectedByteCount: expectedByteCount)
+                          transferID: transferID, expectedByteCount: expectedByteCount, byteRange: byteRange)
     }
 
     func snapshot() throws -> DownloadStorageSnapshot { try disk.load() }
@@ -76,6 +76,25 @@ actor DownloadStorageCoordinator {
                 _ = try await finishAvailablePackage(recordID: receipt.metadata.recordID)
             }
         }
+        for entry in try disk.load().queue where !entry.state.isTerminal {
+            guard let resource = entry.resources?.first(where: { $0.partial != nil }),
+                  let partial = resource.partial else { continue }
+            if partial.totalBytes == partial.byteCount,
+               disk.isRegularFile(try partialURL(partial.fileName)) {
+                _ = try await finishPartial(entry: entry, resource: resource)
+            } else if !disk.isRegularFile(try partialURL(partial.fileName)) {
+                _ = try disk.update { snapshot in
+                    guard let index = snapshot.queue.firstIndex(where: { $0.id == entry.id }),
+                          let component = snapshot.queue[index].resources?.firstIndex(where: { $0.id == resource.id }) else { return }
+                    snapshot.queue[index].state = .failed
+                    snapshot.queue[index].reason = "The saved partial download is missing. Remove this transfer and download it again."
+                    snapshot.queue[index].resources?[component].state = .failed
+                    snapshot.queue[index].resources?[component].reason = "The saved partial download is missing. Remove this transfer and download it again."
+                }
+            }
+        }
+        // Unassigned partial files remain inventoried after damaged-index
+        // recovery. Missing ownership is not permission to erase their bytes.
         let liveStages = Set(try disk.load().transactions.map(\.sourceName))
         for url in try children(store.rootDirectory) where url.lastPathComponent.hasPrefix("assembling-")
             && url.pathExtension == "package" && !liveStages.contains(url.lastPathComponent) {
@@ -139,6 +158,9 @@ actor DownloadStorageCoordinator {
             return current
         }
         guard validResources(entry.resources ?? []) else { throw DownloadStorageFailure.invalidComponent }
+        if let range = receipt.byteRange {
+            return try await receiveRange(receipt, range: range, entry: entry, resource: resource, payload: payload)
+        }
         let attributes = try files.attributesOfItem(atPath: payload.path)
         let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
         guard size > 0 else { throw DownloadStoreError.emptyDownload }
@@ -192,6 +214,7 @@ actor DownloadStorageCoordinator {
                 snapshot.queue[index].resources?[componentIndex].receivedBytes = size
                 snapshot.queue[index].resources?[componentIndex].expectedBytes = size
                 snapshot.queue[index].resources?[componentIndex].resumeReference = nil
+                snapshot.queue[index].resources?[componentIndex].partial = nil
             }
             if resource.verificationPending == true,
                snapshot.queue[index].resources?.contains(where: { $0.resource.required && $0.state == .failed }) != true {
@@ -201,6 +224,130 @@ actor DownloadStorageCoordinator {
             }
         }
         return try await finishAvailablePackage(recordID: receipt.metadata.recordID)
+    }
+
+    func completePartial(_ envelope: DownloadTaskEnvelope, length: Int64, entityTag: String) async throws -> DownloadStorageSnapshot {
+        var snapshot = try disk.load()
+        guard let index = snapshot.queue.firstIndex(where: { $0.id == envelope.metadata.recordID }),
+              !snapshot.queue[index].state.isTerminal,
+              snapshot.queue[index].metadata.attemptID == envelope.metadata.attemptID,
+              let component = snapshot.queue[index].resources?.firstIndex(where: { $0.id == envelope.resourceID && $0.transferID == envelope.transferID }),
+              var partial = snapshot.queue[index].resources?[component].partial,
+              length > 0, partial.byteCount == length, partial.entityTag == entityTag else {
+            throw DownloadStoreError.incompleteDownload
+        }
+        partial.totalBytes = length
+        snapshot.queue[index].resources?[component].partial = partial
+        snapshot = try update(snapshot.queue[index], expectedAttemptID: envelope.metadata.attemptID)
+        guard let entry = snapshot.queue.first(where: { $0.id == envelope.metadata.recordID }),
+              let resource = entry.resources?.first(where: { $0.id == envelope.resourceID }) else {
+            throw DownloadStorageFailure.staleAttempt
+        }
+        return try await finishPartial(entry: entry, resource: resource)
+    }
+
+    private func partialURL(_ name: String) throws -> URL {
+        guard name.hasPrefix("partial-"), name.hasSuffix(".media"),
+              UUID(uuidString: String(name.dropFirst(8).dropLast(6))) != nil else {
+            throw DownloadStoreError.invalidDownloadedFile
+        }
+        return store.rootDirectory.appendingPathComponent(name)
+    }
+
+    /// Append once, sync bytes, then commit the prefix length and its next
+    /// transfer identity atomically. Replaying an ingress receipt after a crash
+    /// truncates an uncommitted tail before copying it again.
+    private func receiveRange(_ receipt: DownloadReceipt, range: DownloadRangeReceipt,
+                              entry: DownloadQueueEntry, resource: DownloadResourceDescriptor,
+                              payload: URL) async throws -> DownloadStorageSnapshot {
+        guard resource.resource.kind == .media, let transferID = receipt.transferID,
+              range.offset >= 0, range.end >= range.offset, range.end < Int64.max,
+              range.total.map({ $0 > range.end }) ?? true else { throw DownloadStoreError.incompleteDownload }
+        let size = (try files.attributesOfItem(atPath: payload.path)[.size] as? NSNumber)?.int64Value ?? 0
+        guard size == range.end + 1 - range.offset else { throw DownloadStoreError.incompleteDownload }
+        if let partial = resource.partial, partial.lastTransferID == transferID {
+            // The index committed the final range before its whole-file
+            // receipt was staged. Recovery must not append that range twice.
+            guard partial.byteCount == range.end + 1, partial.totalBytes == range.total,
+                  partial.entityTag == range.entityTag else { throw DownloadStoreError.incompleteDownload }
+            try ingress.remove(receipt)
+            return try await finishPartial(entry: entry, resource: resource)
+        }
+        guard (resource.partial?.byteCount ?? 0) == range.offset,
+              resource.partial.map({ $0.entityTag == range.entityTag }) ?? true else {
+            throw DownloadStoreError.incompleteDownload
+        }
+        let name = resource.partial?.fileName ?? "partial-\((entry.metadata.attemptID ?? entry.id).uuidString.lowercased()).media"
+        let target = try partialURL(name)
+        if resource.partial == nil {
+            try Data().write(to: target, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+        guard disk.isRegularFile(target),
+              (try files.attributesOfItem(atPath: target.path)[.size] as? NSNumber)?.int64Value ?? 0 >= range.offset else {
+            throw DownloadStoreError.incompleteDownload
+        }
+        let source = try FileHandle(forReadingFrom: payload)
+        defer { try? source.close() }
+        let destination = try FileHandle(forWritingTo: target)
+        defer { try? destination.close() }
+        try destination.truncate(atOffset: UInt64(range.offset))
+        try destination.seek(toOffset: UInt64(range.offset))
+        var remaining = size
+        while remaining > 0 {
+            let data = try source.read(upToCount: Int(min(1_024 * 1_024, remaining))) ?? Data()
+            guard !data.isEmpty else { throw DownloadStoreError.incompleteDownload }
+            try destination.write(contentsOf: data)
+            remaining -= Int64(data.count)
+        }
+        try destination.synchronize()
+        try checkpoint?(.rangeAppended)
+        let partial = DownloadPartialFile(fileName: name, byteCount: range.end + 1, entityTag: range.entityTag,
+                                          totalBytes: range.total, lastTransferID: transferID)
+        let complete = partial.byteCount == partial.totalBytes
+        let committed = try disk.update { snapshot in
+            guard matchingEntry(receipt, in: snapshot) != nil,
+                  let index = snapshot.queue.firstIndex(where: { $0.id == entry.id }),
+                  let component = snapshot.queue[index].resources?.firstIndex(where: { $0.id == resource.id }) else { return }
+            snapshot.queue[index].resources?[component].partial = partial
+            snapshot.queue[index].resources?[component].receivedBytes = partial.byteCount
+            snapshot.queue[index].resources?[component].expectedBytes = partial.totalBytes
+            snapshot.queue[index].resources?[component].resumeReference = nil
+            snapshot.queue[index].resources?[component].preparationPending = false
+            if !complete {
+                snapshot.queue[index].resources?[component].transferID = UUID()
+                snapshot.queue[index].resources?[component].state = .queued
+                snapshot.queue[index].resources?[component].taskIdentifier = nil
+                snapshot.queue[index].resources?[component].sessionIdentifier = nil
+                snapshot.queue[index].resources?[component].scheduledAt = nil
+                snapshot.queue[index].resources?[component].retryAttempt = 0
+                snapshot.queue[index].resources?[component].reason = nil
+                snapshot.queue[index].resources?[component].failure = nil
+                if [.running, .queued].contains(snapshot.queue[index].state) {
+                    snapshot.queue[index].state = .queued
+                    snapshot.queue[index].scheduledAt = nil
+                    snapshot.queue[index].metadata.retryAttempt = 0
+                    snapshot.queue[index].reason = nil
+                    snapshot.queue[index].failure = nil
+                }
+            }
+        }
+        try checkpoint?(.rangeCommitted)
+        try ingress.remove(receipt)
+        if complete, let updated = committed.queue.first(where: { $0.id == entry.id }),
+           let component = updated.resources?.first(where: { $0.id == resource.id }) {
+            return try await finishPartial(entry: updated, resource: component)
+        }
+        return committed
+    }
+
+    private func finishPartial(entry: DownloadQueueEntry, resource: DownloadResourceDescriptor) async throws -> DownloadStorageSnapshot {
+        guard let partial = resource.partial, partial.totalBytes == partial.byteCount else { return try disk.load() }
+        let receipt = try stageTemporaryFile(temporaryURL: partialURL(partial.fileName), metadata: entry.metadata,
+            resourceID: resource.id, transferID: resource.transferID, expectedByteCount: partial.byteCount)
+        var staged = entry
+        if let index = staged.resources?.firstIndex(where: { $0.id == resource.id }) { staged.resources?[index].partial = nil }
+        _ = try update(staged, expectedAttemptID: entry.metadata.attemptID)
+        return try await receive(receipt)
     }
 
     /// Verification retry uses the already owned receipt, with no credentials
@@ -296,7 +443,18 @@ actor DownloadStorageCoordinator {
         // the delegate can stage bytes before its actor operation starts.
         // The owned receipt files, not only the index, define cancellation's
         // cleanup set. The ingress lock also orders this scan with staging.
+        let queued = before.queue.first(where: { $0.id == recordID })
+        var partialNames = Set((queued?.resources ?? []).compactMap { $0.partial?.fileName })
+        if let queued { partialNames.insert("partial-\((queued.metadata.attemptID ?? queued.id).uuidString.lowercased()).media") }
+        for receipt in try ingress.pending() where receipt.metadata.recordID == recordID && receipt.byteRange != nil {
+            partialNames.insert("partial-\((receipt.metadata.attemptID ?? recordID).uuidString.lowercased()).media")
+        }
         try ingress.remove(recordID: recordID)
+        for name in partialNames {
+            if let url = try? partialURL(name), disk.isRegularFile(url) {
+                try files.removeItem(at: url)
+            }
+        }
         return try disk.update { $0.receipts.removeAll { $0.metadata.recordID == recordID } }
     }
 
@@ -346,11 +504,12 @@ actor DownloadStorageCoordinator {
         let trace = DownloadPerformanceTrace.begin("Download Storage Inventory")
         defer { DownloadPerformanceTrace.end("Download Storage Inventory", trace) }
         let snapshot = try? disk.load()
-        let referenced = Set(snapshot?.records.map { $0.packageDirectoryName ?? $0.fileName } ?? [])
+        let referenced = Set((snapshot?.records.map { $0.packageDirectoryName ?? $0.fileName } ?? [])
+            + (snapshot?.queue.flatMap { $0.resources ?? [] }.compactMap { $0.partial?.fileName } ?? []))
         var result: [OfflineStorageInventoryItem] = try children(store.rootDirectory).compactMap { url in
             let name = url.lastPathComponent
             guard referenced.contains(name) || name.hasPrefix("offline-") || name.hasPrefix("assembling-")
-                || name.hasPrefix("deleting-") else { return nil }
+                || name.hasPrefix("deleting-") || name.hasPrefix("partial-") else { return nil }
             let type = try files.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType
             guard type == .typeRegular || type == .typeDirectory else { return nil }
             let size = type == .typeDirectory ? try directoryBytes(url) : (try files.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
@@ -619,7 +778,7 @@ private final class DownloadReceiptIngress: @unchecked Sendable {
     }
 
     func stage(temporaryURL: URL, metadata: DownloadTaskMetadata, resourceID: String,
-               transferID: UUID?, expectedByteCount: Int64?) throws -> DownloadReceipt {
+               transferID: UUID?, expectedByteCount: Int64?, byteRange: DownloadRangeReceipt? = nil) throws -> DownloadReceipt {
         lock.lock()
         defer { lock.unlock() }
         guard (try files.attributesOfItem(atPath: temporaryURL.path)[.type] as? FileAttributeType) == .typeRegular else {
@@ -631,7 +790,8 @@ private final class DownloadReceiptIngress: @unchecked Sendable {
         }
         let id = UUID()
         let receipt = DownloadReceipt(id: id, metadata: metadata, resourceID: resourceID, transferID: transferID,
-                                      directoryName: id.uuidString.lowercased(), expectedByteCount: expectedByteCount)
+                                      directoryName: id.uuidString.lowercased(), expectedByteCount: expectedByteCount,
+                                      byteRange: byteRange)
         let target = directory.appendingPathComponent(receipt.directoryName, isDirectory: true)
         try files.createDirectory(at: target, withIntermediateDirectories: true)
         var rootURL = root

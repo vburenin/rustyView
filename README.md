@@ -187,6 +187,12 @@ chapters. **Watch Online** remains available when connected, with its own audio
 and quality choices. A local playback failure never silently switches online.
 Transient download failures retry automatically up to six times; after that,
 choose **Retry Now** when your connection is available.
+Automatic recovery and Retry Now retain saved bytes and the same prepared file.
+On servers supporting progressive downloads, compatible copies transfer video
+while preparation continues. The app keeps received ranges and resumes within
+an interrupted transfer when switching between Wi-Fi and cellular. Preparation
+progress and downloaded bytes remain visible together; the copy becomes playable
+after the server confirms its final size and the app verifies the local file.
 Failed requests and their selected format remain in the queue across relaunches
 until you retry or remove them. Retry requires the account that requested the
 download. Retrying a stalled local verification uses the retained bytes and
@@ -205,8 +211,9 @@ new account's library.
 Downloads can continue in the background. If you force-quit rustyView, reopen
 it to let transfers continue. Pause a transfer and resume it later; rustyView
 preserves transferred bytes when the server and system support resumption.
-An older server or a changing prepared file may require a fresh transfer, which
-the queue explains. To save mobile data, select **Wi-Fi Only** under
+An older server without resumable delivery, a replaced server file, or system
+removal of temporary bytes may require a fresh transfer.
+To save mobile data, select **Wi-Fi Only** under
 **Settings → Downloads → Network**. Waiting for Wi-Fi, a paused download, and a
 scheduled retry have distinct states. A small number of transfers run at once;
 the rest remain queued. Choose **Delete Download** from a copy's actions menu to free space on

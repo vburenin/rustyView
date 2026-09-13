@@ -34,6 +34,8 @@ struct DownloadResourceDescriptor: Codable, Hashable, Identifiable, Sendable {
     var reason: String?
     var failure: UserFacingError? = nil
     var verificationPending: Bool? = nil
+    var preparationPending: Bool? = nil
+    var partial: DownloadPartialFile? = nil
     var id: String { resource.runtimeID }
 
     init(resource: OfflineResource, transferID: UUID = UUID()) {
@@ -57,12 +59,14 @@ struct DownloadTaskEnvelope: Codable, Equatable, Sendable {
     let resourceID: String
     let transferID: UUID
     let kind: OfflineResourceKind
+    var byteOffset: Int64? = nil
 
     init(metadata: DownloadTaskMetadata, resource: DownloadResourceDescriptor) {
         self.metadata = metadata
         resourceID = resource.id
         transferID = resource.transferID
         kind = resource.resource.kind
+        byteOffset = resource.partial?.byteCount
     }
 
     init(legacyMetadata: DownloadTaskMetadata) {
@@ -78,6 +82,37 @@ struct DownloadTaskEnvelope: Codable, Equatable, Sendable {
             return envelope
         }
         return (try? JSONDecoder().decode(DownloadTaskMetadata.self, from: data)).map(Self.init(legacyMetadata:))
+    }
+}
+
+/// Only committed ranges contribute to this durable prefix. A native task may
+/// additionally retain an encrypted resume archive for its current range.
+struct DownloadPartialFile: Codable, Hashable, Sendable {
+    var fileName: String
+    var byteCount: Int64
+    var entityTag: String
+    var totalBytes: Int64?
+    var lastTransferID: UUID
+}
+
+struct DownloadRangeReceipt: Codable, Equatable, Sendable {
+    let offset: Int64
+    let end: Int64
+    let total: Int64?
+    let entityTag: String
+
+    init(response: HTTPURLResponse, envelope: DownloadTaskEnvelope) throws {
+        guard response.statusCode == 206,
+              let header = response.value(forHTTPHeaderField: "Content-Range"),
+              let range = DownloadHTTPRange.parse(header), range.end < Int64.max,
+              let tag = response.value(forHTTPHeaderField: "ETag"), tag.hasPrefix("\""), tag.hasSuffix("\""),
+              tag.utf8.count <= 256, range.start >= (envelope.byteOffset ?? 0) else {
+            throw DownloadStoreError.incompleteDownload
+        }
+        offset = envelope.byteOffset ?? 0
+        end = range.end
+        total = range.total
+        entityTag = tag
     }
 }
 

@@ -173,7 +173,20 @@ cohesive product rather than independent demos.
   preserves the server path and retry attempt. Transient transport, rate-limit,
   timeout, and server failures create a new system-owned background task with
   bounded exponential backoff, so retry scheduling survives app suspension.
-  Automatic retries stop after six attempts and expose Retry Now. Installation
+  Automatic retries stop after six attempts and expose Retry Now. Recovery
+  and Retry Now retain the same prepared generation whenever a native resume
+  archive or a committed partial file exists. Compatible media requests opt
+  into `X-RustyDLNA-Download: progressive`: bounded, validator-backed ranges
+  transfer while the server prepares more output. The storage actor appends
+  each range, syncs it, then commits its prefix length and next transfer identity.
+  Native resume data retains progress within an interrupted range. A matching
+  HTTP 202 `preparing` response requeues the same generation using Retry-After
+  without consuming the transport retry budget. Unknown-total ranges remain
+  partial; a final total (including a matching-validator 416 at exact EOF) and
+  local media inspection are required before installation. Relaunch replays
+  interrupted appends without duplicating bytes, and cancellation removes the
+  owned prefix. Legacy servers may ignore this header and retain their existing,
+  less reliable growing-response behavior. Installation
   and cancellation are serialized so late completions cannot publish cancelled
   copies; manifest operations are serialized and failed deletion saves restore
   the original media file.
@@ -277,6 +290,10 @@ that repository's `AGENTS.md` rules and preserve compatibility with the web
 player.
 
 ## Environments and server access
+
+- Read `private/PROJECT_MEMORY.md` when present for this checkout's private
+  deployment instructions. The ignored `private/` directory must never be added
+  to Git; keep host addresses and operator details there.
 
 - Production endpoints, host addresses, and account names are private and are
   provided to authorized developers out of band. Never place them in source,

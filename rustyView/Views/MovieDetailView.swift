@@ -775,6 +775,7 @@ struct MovieDetailView: View {
     private func downloadStatus(_ download: ActiveDownload) -> String? {
         switch download.phase {
         case .queued: "Queued"
+        case .preparing: "Preparing…"
         case .downloading: "Downloading…"
         case .retrying: "Retrying…"
         case .finishing: "Saving…"

@@ -678,9 +678,11 @@ private final class ByteTotalsHTTP: @unchecked Sendable {
         } else if request.target.hasPrefix("/web/media/"), request.method == "GET" {
             media = connection
             let start = growingRangeOnResume ? min(payload.count - 1, max(0, request.rangeStart ?? 0)) : 0
-            chunkEnd = growingRangeOnResume && request.rangeStart == nil
+            // The real server treats bytes=0- as the initial open response;
+            // only a nonzero offset exercises the resumed growing snapshot.
+            chunkEnd = growingRangeOnResume && (request.rangeStart ?? 0) == 0
                 ? payload.count * 2 / 3 : start + (payload.count - start) / 3
-            let ranged = growingRangeOnResume && request.rangeStart != nil
+            let ranged = growingRangeOnResume && (request.rangeStart ?? 0) > 0
             let length = growingRangeOnResume
                 ? "Content-Length: \(payload.count - start)\r\nAccept-Ranges: bytes\r\nETag: \"synthetic-byte-v1\"\r\n"
                 : "Transfer-Encoding: chunked\r\n"

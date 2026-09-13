@@ -143,7 +143,7 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate {
                     }
                 }
             } else {
-                progressDelivery.submit(.init(envelope: envelope, received: totalBytesWritten, expected: expected)) { [weak owner] sample in
+                progressDelivery.submit(.init(envelope: envelope, received: (envelope.byteOffset ?? 0) + totalBytesWritten, expected: expected)) { [weak owner] sample in
                     Task { @MainActor [weak owner] in
                         owner?.resourceProgress(sample.envelope, received: sample.received, expected: sample.expected)
                     }
@@ -180,6 +180,27 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate {
                 guard DownloadOriginPolicy.permits(downloadTask.response?.url, metadata: envelope.metadata) else {
                     throw RustyDLNAError.untrustedURL
                 }
+                if envelope.kind == .media, envelope.metadata.kind == .compatible,
+                   let response = downloadTask.response as? HTTPURLResponse,
+                   response.statusCode == 202,
+                   response.value(forHTTPHeaderField: "X-RustyDLNA-Download") == "preparing" {
+                    let delay = TimeInterval(response.value(forHTTPHeaderField: "Retry-After") ?? "") ?? 30
+                    Task { @MainActor [weak owner, processing] in
+                        await owner?.resourcePreparing(envelope, retryAfter: delay)
+                        processing.leave()
+                    }
+                    return
+                }
+                if envelope.kind == .media, let response = downloadTask.response as? HTTPURLResponse,
+                   response.statusCode == 416, response.value(forHTTPHeaderField: "X-RustyDLNA-Download") == "progressive",
+                   let range = response.value(forHTTPHeaderField: "Content-Range"), range.hasPrefix("bytes */"),
+                   let length = Int64(range.dropFirst(8)), let tag = response.value(forHTTPHeaderField: "ETag") {
+                    Task { @MainActor [weak owner, processing] in
+                        await owner?.resourceRangeComplete(envelope, length: length, entityTag: tag)
+                        processing.leave()
+                    }
+                    return
+                }
                 if let failure = DownloadResponseValidator.failure(for: downloadTask.response), envelope.kind == .media {
                     completeFailure(envelope, message: failure,
                                     retryable: DownloadResponseValidator.isRetryable(downloadTask.response),
@@ -192,6 +213,17 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate {
                                     failure: .downloadResponse(downloadTask.response))
                     return
                 }
+                if envelope.kind == .media, response.value(forHTTPHeaderField: "X-RustyDLNA-Download") == "progressive" {
+                    let range = try DownloadRangeReceipt(response: response, envelope: envelope)
+                    let receipt = try coordinator.stageTemporaryFile(temporaryURL: location, metadata: envelope.metadata,
+                        resourceID: envelope.resourceID, transferID: envelope.transferID, byteRange: range)
+                    Task { @MainActor [weak owner, processing] in
+                        await owner?.receive(receipt, envelope: envelope)
+                        processing.leave()
+                    }
+                    return
+                }
+                guard (envelope.byteOffset ?? 0) == 0 else { throw DownloadStoreError.incompleteDownload }
                 if response.statusCode == 206, DownloadHTTPRange.completeLength(of: response) == nil {
                     completeFailure(envelope, message: "The server is still preparing this file. This partial response cannot be used as a complete download.", retryable: true,
                                     failure: UserFacingError(category: .transient, message: "The server is still preparing this file. The download will retry when it is ready."))
@@ -274,9 +306,12 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate {
         if coordinator != nil, let envelope = DownloadTaskEnvelope.decode(task.taskDescription) {
             processing.enter()
             let resumeData = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data
+            let received = (envelope.byteOffset ?? 0) + task.countOfBytesReceived
+            let expected = DownloadProgressValues.expectedByteCount(reported: task.countOfBytesExpectedToReceive, response: task.response)
             Task { @MainActor [weak owner, processing] in
                 await owner?.resourceFailure(envelope, message: error.localizedDescription,
                                              retryable: DownloadRetryPolicy.isRetryable(error), resumeData: resumeData,
+                                             received: received, expected: expected,
                                              cancelled: (error as NSError).code == NSURLErrorCancelled,
                                              cannotResume: [NSURLErrorUnknown, NSURLErrorBadURL, NSURLErrorUnsupportedURL,
                                                             NSURLErrorCannotOpenFile, NSURLErrorCannotWriteToFile,

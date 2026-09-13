@@ -4,6 +4,19 @@ import XCTest
 
 @MainActor
 final class DownloadPollingTests: XCTestCase {
+    func testPreparationProgressDoesNotWaitForNextMediaDeliveryAttempt() async throws {
+        let fixture = try PollingFixture(count: 1, startDelay: 30, preparationPending: true) { _, request in
+            .response(status: 200, body: PollingHTTP.status(for: request))
+        }
+        addTeardownBlock { await fixture.cleanUp() }
+        await fixture.start()
+        try await eventually("Preparation status must remain visible during the retained 30-second media retry delay") {
+            fixture.manager.preparationProgress.count == 1
+        }
+        XCTAssertEqual(fixture.manager.active.first?.phase, .preparing)
+        XCTAssertEqual(fixture.http.mediaRequestCount, 1, "Progress must not replace the scheduled media request")
+    }
+
     func testFutureRetryDeadlineStartsPollingWithoutARecurringWakeupLoop() async throws {
         let fixture = try PollingFixture(count: 1, startDelay: 1.5) { _, request in
             .response(status: 200, body: PollingHTTP.status(for: request))
@@ -148,7 +161,8 @@ private final class PollingFixture {
     var mediaIDs: [String] { entries.map(\.metadata.mediaID) }
     var authorization: String { "Basic " + Data("poll-viewer:synthetic-poll-secret".utf8).base64EncodedString() }
 
-    init(count: Int, startDelay: TimeInterval = 0, response: @escaping (Int, URLRequest) -> PollingHTTP.Reply) throws {
+    init(count: Int, startDelay: TimeInterval = 0, preparationPending: Bool = false,
+         response: @escaping (Int, URLRequest) -> PollingHTTP.Reply) throws {
         let namespace = UUID().uuidString.lowercased()
         root = FileManager.default.temporaryDirectory.appendingPathComponent("polling-tests-\(namespace)")
         var address = URLComponents()
@@ -165,6 +179,13 @@ private final class PollingFixture {
             var entry = DownloadQueueEntry(metadata: metadata)
             entry.enqueuedAt = Date(timeIntervalSince1970: Double(100 + index))
             if startDelay > 0 { entry.scheduledAt = Date().addingTimeInterval(startDelay) }
+            if preparationPending {
+                var media = DownloadResourceDescriptor(resource: OfflineResource(id: metadata.recordID, kind: .media,
+                    remotePath: metadata.serverPath ?? "", fileName: "media.mp4", required: true))
+                media.preparationPending = true
+                media.scheduledAt = entry.scheduledAt
+                entry.resources = [media]
+            }
             return entry
         }
         try DownloadQueueStore(rootDirectory: root).save(DownloadQueueJournal(entries: entries))

@@ -4,6 +4,92 @@ import XCTest
 @testable import rustyView
 
 final class DownloadStorageTransactionTests: XCTestCase {
+    func testGrowingRangesRecoverWithoutDuplicatingBytesAtEachAppendCommitBoundary() async throws {
+        for boundary in [DownloadStorageBoundary.rangeAppended, .rangeCommitted] {
+            for interruptFinalRange in [false, true] {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let bytes = try OfflineMediaFixture.validData()
+                let split = bytes.count / 2
+                let store = DownloadManifestStore(rootDirectory: root.appendingPathComponent("offline"))
+                let coordinator = DownloadStorageCoordinator(store: store)
+                var current = entry()
+                _ = try await coordinator.enqueue(current)
+                if interruptFinalRange {
+                    let saved = try await deliverRange(Data(bytes[..<split]), total: nil, entry: current, coordinator: coordinator, root: root)
+                    current = try XCTUnwrap(saved.queue.first)
+                }
+                let interrupted = DownloadStorageCoordinator(store: store) { reached in
+                    if reached == boundary { throw DownloadStorageFailure.interrupted }
+                }
+                do {
+                    _ = try await deliverRange(interruptFinalRange ? Data(bytes[split...]) : Data(bytes[..<split]),
+                        total: interruptFinalRange ? bytes.count : nil, entry: current, coordinator: interrupted, root: root)
+                    XCTFail("The durable range boundary must interrupt")
+                } catch DownloadStorageFailure.interrupted { }
+                let reopened = DownloadStorageCoordinator(store: store)
+                var recovered = try await reopened.restore()
+                if !interruptFinalRange {
+                    XCTAssertTrue(recovered.records.isEmpty)
+                    XCTAssertEqual(recovered.queue.first?.resources?.first?.partial?.byteCount, Int64(split))
+                    recovered = try await deliverRange(Data(bytes[split...]), total: bytes.count,
+                        entry: XCTUnwrap(recovered.queue.first), coordinator: reopened, root: root)
+                }
+                let record = try XCTUnwrap(recovered.records.first)
+                XCTAssertEqual(try Data(contentsOf: store.localURL(for: record)), bytes)
+                let repeated = try await reopened.restore()
+                XCTAssertEqual(repeated.records, recovered.records)
+                let inventory = try await reopened.inventory()
+                XCTAssertFalse(inventory.contains(where: \.recoverable))
+                XCTAssertFalse(inventory.contains(where: { $0.id.hasPrefix("incoming/") || $0.id.hasPrefix("partial-") }))
+            }
+        }
+    }
+
+    func testGrowingPrefixRejectsChangedValidatorAndCancellationReclaimsItsBytes() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bytes = try OfflineMediaFixture.validData()
+        let split = bytes.count / 2
+        let store = DownloadManifestStore(rootDirectory: root.appendingPathComponent("offline"))
+        let coordinator = DownloadStorageCoordinator(store: store)
+        let original = entry()
+        _ = try await coordinator.enqueue(original)
+        let saved = try await deliverRange(Data(bytes[..<split]), total: nil, entry: original, coordinator: coordinator, root: root)
+        let retained = try XCTUnwrap(saved.queue.first)
+        do {
+            _ = try await deliverRange(Data(bytes[split...]), total: bytes.count, entry: retained,
+                coordinator: coordinator, root: root, tag: "\"another-output\"")
+            XCTFail("Ranges from different prepared outputs must never be combined")
+        } catch DownloadStoreError.incompleteDownload { }
+        let rejected = try await coordinator.snapshot()
+        XCTAssertEqual(rejected.queue.first?.resources?.first?.partial, retained.resources?.first?.partial)
+        XCTAssertTrue(rejected.records.isEmpty)
+        _ = try await coordinator.cancel(recordID: original.id)
+        let reopened = DownloadStorageCoordinator(store: store)
+        let restored = try await reopened.restore()
+        XCTAssertTrue(restored.records.isEmpty)
+        XCTAssertEqual(restored.queue.first?.state, .cancelled)
+        let inventory = try await reopened.inventory()
+        XCTAssertTrue(inventory.isEmpty)
+    }
+
+    private func deliverRange(_ bytes: Data, total: Int?, entry: DownloadQueueEntry,
+                              coordinator: DownloadStorageCoordinator, root: URL,
+                              tag: String = "\"synthetic-output\"") async throws -> DownloadStorageSnapshot {
+        let resource = try XCTUnwrap(entry.resources?.first(where: { $0.resource.kind == .media }))
+        let offset = resource.partial?.byteCount ?? 0
+        let response = try XCTUnwrap(HTTPURLResponse(url: URL(string: "https://media.example.test/range")!, statusCode: 206,
+            httpVersion: "HTTP/1.1", headerFields: ["Content-Range": "bytes \(offset)-\(offset + Int64(bytes.count) - 1)/\(total.map(String.init) ?? "*")", "ETag": tag]))
+        let envelope = DownloadTaskEnvelope(metadata: entry.metadata, resource: resource)
+        let range = try DownloadRangeReceipt(response: response, envelope: envelope)
+        let temporary = root.appendingPathComponent(UUID().uuidString)
+        try bytes.write(to: temporary)
+        let receipt = try coordinator.stageTemporaryFile(temporaryURL: temporary, metadata: entry.metadata,
+            resourceID: resource.id, transferID: resource.transferID, byteRange: range)
+        return try await coordinator.receive(receipt)
+    }
+
     func testStoredLegacyTimeoutCanRecheckItsOwnedBytesWithoutConnection() async throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }

@@ -170,6 +170,7 @@ private enum DownloadMetadataPresentation {
 
 enum DownloadPhase: Equatable, Sendable {
     case queued
+    case preparing
     case pausing
     case cancelling
     case paused(canResume: Bool)

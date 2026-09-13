@@ -25,15 +25,20 @@ struct DownloadQueueEntry: Codable, Equatable, Identifiable, Sendable {
         case .pausing:
             phase = .pausing
         case .paused:
-            phase = .paused(canResume: resources?.contains(where: { $0.resumeReference != nil }) == true)
+            phase = .paused(canResume: resources?.contains(where: { $0.resumeReference != nil || $0.partial != nil }) == true)
         case .waiting:
             phase = .waiting(reason: waitingReason ?? .credentials)
         case .installing:
             phase = .finishing
         case .queued, .running:
-            if let scheduledAt, (metadata.retryAttempt ?? 0) > 0 {
+            if resources?.contains(where: { $0.preparationPending == true && $0.receivedBytes == 0 }) == true {
+                phase = .preparing
+            } else if let scheduledAt, (metadata.retryAttempt ?? 0) > 0 {
                 phase = .retrying(attempt: metadata.retryAttempt ?? 0, scheduledAt: scheduledAt,
                                   reason: reason ?? "The previous attempt was interrupted.")
+            } else if let media = resources?.first(where: { $0.resource.kind == .media }), let partial = media.partial {
+                phase = .downloading(progress: partial.totalBytes.map { Double(media.receivedBytes) / Double($0) } ?? 0,
+                                     received: media.receivedBytes, expected: partial.totalBytes)
             } else {
                 phase = .queued
             }

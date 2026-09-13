@@ -7,7 +7,7 @@ struct DownloadProgressPresentation {
 
     var activePreparation: DownloadPreparationProgress? {
         switch phase {
-        case .queued, .downloading:
+        case .queued, .preparing, .downloading:
             guard let preparation, !preparation.isComplete, preparation.fraction < 1 else { return nil }
             return preparation
         default: return nil

@@ -373,21 +373,20 @@ final class DownloadManager: ObservableObject {
                 return
             }
             let old = entry.metadata
-            if entry.resources?.contains(where: { $0.state == .delivered || $0.state == .running }) != true {
+            if entry.resources?.contains(where: { $0.state == .delivered || $0.state == .running || $0.resumeReference != nil || $0.partial != nil }) != true {
                 entry.metadata.attemptID = UUID()
             }
             // Successfully staged siblings retain the same logical attempt.
             // Only the failed resource receives a new transfer UUID.
             for index in entry.resources?.indices ?? 0..<0 where entry.resources?[index].state == .failed {
                 if entry.resources?[index].resource.kind == .media, entry.metadata.kind == .compatible,
+                   entry.resources?[index].resumeReference == nil, entry.resources?[index].partial == nil,
                    let path = entry.metadata.serverPath {
                     let replacement = try DownloadPreparedRequest.replacementPath(path)
                     entry.metadata.serverPath = replacement
                     entry.resources?[index].serverPath = replacement
                     self.cancelPreparedRequest(old)
                 }
-                try? await self.vault.remove(entry.resources?[index].resumeReference)
-                entry.resources?[index].resumeReference = nil
                 entry.resources?[index].transferID = UUID()
                 entry.resources?[index].retryAttempt = 0
                 entry.resources?[index].scheduledAt = nil
@@ -505,11 +504,16 @@ final class DownloadManager: ObservableObject {
             guard let self else { return }
             let resumeReference = self.owned(envelope)?.1.resumeReference
             self.tasks.removeValue(forKey: envelope.transferID)
-            if envelope.kind == .media {
+            if envelope.kind == .media, receipt.byteRange == nil || receipt.byteRange?.total == receipt.byteRange.map({ $0.end + 1 }) {
                 self.setVisiblePhase(envelope.metadata.recordID, .finishing)
             }
             do {
+                var schedule = self.entry(envelope.metadata.recordID).map { self.pollState(for: $0) }
                 self.apply(try await self.storage.receive(receipt))
+                if let current = self.entry(envelope.metadata.recordID), schedule != nil {
+                    schedule?.transferID = current.resources?.first(where: { $0.resource.kind == .media })?.transferID
+                    self.pollSchedule[current.id] = schedule
+                }
                 try? await self.vault.remove(resumeReference)
             } catch {
                 self.apply(try await self.storage.snapshot())
@@ -524,8 +528,53 @@ final class DownloadManager: ObservableObject {
         await pending?.value
     }
 
+    func resourceRangeComplete(_ envelope: DownloadTaskEnvelope, length: Int64, entityTag: String) async {
+        enqueueOperation { [weak self] in
+            guard let self, self.owned(envelope) != nil else { return }
+            self.tasks.removeValue(forKey: envelope.transferID)
+            do {
+                self.setVisiblePhase(envelope.metadata.recordID, .finishing)
+                self.apply(try await self.storage.completePartial(envelope, length: length, entityTag: entityTag))
+            } catch {
+                try await self.failResource(envelope, message: error.localizedDescription, retryable: false, failure: UserFacingError(error))
+            }
+            try await self.schedule()
+        }
+        await pending?.value
+    }
+
+    /// Preparation is successful server work, not a failed transfer. Requeue
+    /// the exact generation in URLSession so it continues while suspended.
+    func resourcePreparing(_ envelope: DownloadTaskEnvelope, retryAfter: TimeInterval) async {
+        enqueueOperation { [weak self] in
+            guard let self, var (entry, resource) = self.owned(envelope), resource.state == .running else { return }
+            self.tasks.removeValue(forKey: envelope.transferID)
+            resource.taskIdentifier = nil
+            resource.sessionIdentifier = nil
+            let oldResumeReference = resource.resumeReference
+            resource.resumeReference = nil
+            resource.receivedBytes = resource.partial?.byteCount ?? 0
+            resource.expectedBytes = resource.partial?.totalBytes
+            resource.transferID = UUID()
+            resource.state = .queued
+            resource.preparationPending = true
+            resource.scheduledAt = Date().addingTimeInterval(retryAfter.isFinite ? max(1, min(60, retryAfter)) : 30)
+            var statusSchedule = self.pollState(for: entry)
+            statusSchedule.transferID = resource.transferID
+            self.pollSchedule[entry.id] = statusSchedule
+            if entry.state != .failed { entry.state = .queued }
+            entry.scheduledAt = resource.scheduledAt
+            self.replace(resource, in: &entry)
+            try await self.save(entry)
+            try? await self.vault.remove(oldResumeReference)
+            try await self.schedule()
+        }
+        await pending?.value
+    }
+
     func resourceFailure(_ envelope: DownloadTaskEnvelope, message: String, retryable: Bool,
-                         resumeData: Data? = nil, cancelled: Bool = false, cannotResume: Bool = false,
+                         resumeData: Data? = nil, received: Int64? = nil, expected: Int64? = nil,
+                         cancelled: Bool = false, cannotResume: Bool = false,
                          failure: UserFacingError? = nil) async {
         enqueueOperation { [weak self] in
             guard let self else { return }
@@ -536,14 +585,16 @@ final class DownloadManager: ObservableObject {
             if cancelled && (resource.state == .pausing || resource.state == .paused) { return }
             let rejectedResume = cannotResume && resource.resumeReference != nil
             try await self.failResource(envelope, message: message, retryable: retryable || rejectedResume,
-                                        resumeData: resumeData, cannotResume: rejectedResume, failure: failure)
+                                        resumeData: resumeData, received: received, expected: expected,
+                                        cannotResume: rejectedResume, failure: failure)
             try await self.schedule()
         }
         await pending?.value
     }
 
     private func failResource(_ envelope: DownloadTaskEnvelope, message: String, retryable: Bool,
-                              resumeData: Data? = nil, cannotResume: Bool = false, failure: UserFacingError? = nil) async throws {
+                              resumeData: Data? = nil, received: Int64? = nil, expected: Int64? = nil,
+                              cannotResume: Bool = false, failure: UserFacingError? = nil) async throws {
         guard var (entry, resource) = owned(envelope), resource.state != .delivered,
               resource.state != .failed else { return }
         let previousFailure = entry.state == .failed ? entry.reason : nil
@@ -552,13 +603,29 @@ final class DownloadManager: ObservableObject {
         tasks.removeValue(forKey: resource.transferID)
         resource.taskIdentifier = nil
         resource.sessionIdentifier = nil
-        if let resumeData { resource.resumeReference = try await vault.save(resumeData, envelope: envelope) }
+        if let received { resource.receivedBytes = max(resource.receivedBytes, received) }
+        if let expected { resource.expectedBytes = expected }
+        resource.preparationPending = false
+        let oldResumeReference = resource.resumeReference
+        var canRetry = retryable
+        var resumeFailure: UserFacingError?
+        if let resumeData {
+            do { resource.resumeReference = try await vault.save(resumeData, envelope: envelope) }
+            catch {
+                let cause = UserFacingError(error)
+                resumeFailure = UserFacingError(category: cause.category, title: cause.title,
+                    message: "Download progress could not be saved. \(cause.message)")
+                resource.failure = resumeFailure
+                canRetry = false
+            }
+        }
         if cannotResume {
-            try? await vault.remove(resource.resumeReference)
             resource.resumeReference = nil
-            resource.reason = "The server could not resume the saved bytes. This download will restart."
-        } else { resource.reason = message }
-        if retryable && resource.retryAttempt < DownloadRetryPolicy.maximumAttempts {
+            resource.reason = resource.partial == nil
+                ? "The server could not resume the saved bytes. This download will restart."
+                : "The interrupted portion could not resume. Continuing from saved download progress."
+        } else { resource.reason = resumeFailure?.message ?? message }
+        if canRetry && resource.retryAttempt < DownloadRetryPolicy.maximumAttempts {
             resource.retryAttempt += 1
             resource.scheduledAt = Date().addingTimeInterval(DownloadRetryPolicy.delay(forAttempt: resource.retryAttempt))
             resource.transferID = UUID()
@@ -576,6 +643,7 @@ final class DownloadManager: ObservableObject {
         entry.failure = resource.resource.kind == .media ? resource.failure : previousIssue ?? resource.failure
         replace(resource, in: &entry)
         try await save(entry)
+        if oldResumeReference != resource.resumeReference { try? await vault.remove(oldResumeReference) }
         if !resource.resource.required && resource.state == .failed {
             try await finishPackage(entry.id)
         }
@@ -610,8 +678,8 @@ final class DownloadManager: ObservableObject {
             var failedToSaveResume = false
             let envelope = DownloadTaskEnvelope(metadata: entry.metadata, resource: resource)
             if let task = tasks.removeValue(forKey: resource.transferID) as? URLSessionDownloadTask {
-                resource.receivedBytes = max(0, task.countOfBytesReceived)
-                resource.expectedBytes = task.countOfBytesExpectedToReceive > 0 ? task.countOfBytesExpectedToReceive : nil
+                resource.receivedBytes = (resource.partial?.byteCount ?? 0) + max(0, task.countOfBytesReceived)
+                resource.expectedBytes = DownloadProgressValues.expectedByteCount(reported: task.countOfBytesExpectedToReceive, response: task.response)
                 let data = await withCheckedContinuation { continuation in
                     task.cancel { continuation.resume(returning: $0) }
                 }
@@ -620,7 +688,7 @@ final class DownloadManager: ObservableObject {
                     catch {
                         let cause = UserFacingError(error)
                         let issue = UserFacingError(category: cause.category, title: cause.title,
-                            message: "Download progress could not be saved. \(cause.message) Continuing will restart this file.")
+                            message: "Download progress could not be saved. \(cause.message) The unfinished portion may need to be downloaded again.")
                         try? await vault.remove(resource.resumeReference)
                         resource.resumeReference = nil
                         resource.reason = issue.message
@@ -630,7 +698,9 @@ final class DownloadManager: ObservableObject {
                     }
                 }
                 if resource.receivedBytes > 0 && resource.resumeReference == nil && !failedToSaveResume {
-                    resource.reason = "The server did not provide resumable bytes. Continuing will restart this file."
+                    resource.reason = resource.partial == nil
+                        ? "The server did not provide resumable bytes. Continuing will restart this file."
+                        : "Continuing from saved download progress."
                 }
             }
             resource.transferID = UUID()
@@ -701,7 +771,7 @@ final class DownloadManager: ObservableObject {
                     continue
                 }
                 try await launch(entry, resource: resource)
-                slots -= 1
+                slots = max(0, maximumTransfers - tasks.count)
             }
         }
         ensurePoller()
@@ -717,9 +787,12 @@ final class DownloadManager: ObservableObject {
         let resumeData: Data?
         do { resumeData = try await resource.resumeReference.flatMapAsync { try await vault.load($0, envelope: envelope) } }
         catch {
-            resource.resumeReference = nil
-            resource.reason = "The saved resume information could not be read. This file will restart."
-            resumeData = nil
+            // An unavailable Keychain is not evidence that the saved bytes are
+            // invalid. Keep their archive and expose Retry instead of silently
+            // starting an authenticated request at byte zero.
+            try await failResource(envelope, message: "Saved download progress could not be read. \(UserFacingError(error).message)",
+                                   retryable: false, failure: UserFacingError(error))
+            return
         }
         if let resumeData {
             task = session.downloadTask(withResumeData: resumeData)
@@ -733,6 +806,14 @@ final class DownloadManager: ObservableObject {
             var request = URLRequest(url: url)
             request.setValue(connection.authorizationHeader(), forHTTPHeaderField: "Authorization")
             request.setValue(resource.resource.kind == .media ? "video/*, application/octet-stream" : "*/*", forHTTPHeaderField: "Accept")
+            if resource.resource.kind == .media, entry.metadata.kind == .compatible {
+                request.setValue("progressive", forHTTPHeaderField: "X-RustyDLNA-Download")
+                let offset = resource.partial?.byteCount ?? 0
+                let end = offset.addingReportingOverflow(64 * 1_024 * 1_024 - 1)
+                guard !end.overflow else { throw DownloadStoreError.incompleteDownload }
+                request.setValue(offset == 0 ? "bytes=0-" : "bytes=\(offset)-\(end.partialValue)", forHTTPHeaderField: "Range")
+                if let tag = resource.partial?.entityTag { request.setValue(tag, forHTTPHeaderField: "If-Match") }
+            }
             // Policy belongs to the background session. This lets an opaque
             // resume request move between policy sessions without plist edits.
             request.allowsCellularAccess = true
@@ -819,7 +900,7 @@ final class DownloadManager: ObservableObject {
             publish()
             if task.state == .running, task.earliestBeginDate.map({ $0 <= Date() }) != false,
                DownloadResponseValidator.failure(for: task.response) == nil {
-                resourceProgress(envelope, received: max(0, task.countOfBytesReceived),
+                resourceProgress(envelope, received: (envelope.byteOffset ?? 0) + max(0, task.countOfBytesReceived),
                                  expected: DownloadHTTPRange.completeLength(of: task.response))
             }
             renditions.append(existing.metadata)
@@ -1051,7 +1132,12 @@ final class DownloadManager: ObservableObject {
     }
 
     private func nextPollDate(for entry: DownloadQueueEntry) -> Date {
-        let scheduled = entry.resources?.first { $0.resource.kind == .media }?.scheduledAt ?? .distantPast
+        let media = entry.resources?.first { $0.resource.kind == .media }
+        // A successful preparation response delays only the next file GET.
+        // Keep optional foreground status on its own bounded cadence; actual
+        // transport failures still delay both requests until their retry date.
+        if media?.preparationPending == true { return pollState(for: entry).next }
+        let scheduled = media?.scheduledAt ?? .distantPast
         return max(pollState(for: entry).next, scheduled)
     }
 
