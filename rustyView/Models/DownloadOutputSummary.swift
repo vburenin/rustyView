@@ -40,9 +40,10 @@ struct DownloadOutputSummary {
         let available = item.captions.filter(\.isPlayableOnDevice).count
         let sidecars = available > 0 ? "\(available) subtitle file\(available == 1 ? "" : "s") included."
             : "No subtitle files available."
-        subtitles = sidecars + (kind == .original
-            ? " Embedded subtitles preserved; playback support varies."
-            : " Embedded subtitles not included.")
+        let unsupported = item.captions.filter { !$0.isPlayableOnDevice }.count
+        let subtitleLimitation = unsupported > 0 ? " \(unsupported) unsupported subtitle track\(unsupported == 1 ? "" : "s") cannot be saved as text."
+            : item.embeddedCaptionsComplete == nil ? " Embedded subtitles may be unavailable with this server." : ""
+        subtitles = sidecars + subtitleLimitation + (kind == .original ? " Original embedded tracks are also preserved; playback support varies." : "")
         if kind == .original {
             video = "Source resolution and \(item.hdr.uppercased()) preserved."
             audio = "All original audio tracks; playback support varies."
@@ -90,9 +91,9 @@ struct DownloadOutputSummary {
                 changes.append("Video quality or HDR may change.")
             }
             if downloadAudio == nil { changes.append("Audio becomes stereo.") }
-            changes.append("Embedded subtitles are not included.")
-            featureChangeNotice = changes.joined(separator: " ")
-            facts.append(available > 0 ? sidecars + " Embedded subtitles omitted." : "Embedded subtitles omitted; no separate subtitle files")
+            if !subtitleLimitation.isEmpty { changes.append(subtitleLimitation.trimmingCharacters(in: .whitespaces)) }
+            featureChangeNotice = changes.isEmpty ? nil : changes.joined(separator: " ")
+            facts.append(sidecars + subtitleLimitation)
             essential = facts.joined(separator: " · ")
         }
     }

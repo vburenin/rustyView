@@ -100,6 +100,7 @@ struct DownloadRecord: Codable, Identifiable, Hashable, Sendable {
 }
 
 struct DownloadTaskMetadata: Codable, Equatable, Sendable {
+    var subtitlesOnly: Bool? = nil
     let recordID: UUID
     var serverOrigin: String
     let mediaID: String

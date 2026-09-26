@@ -14,6 +14,7 @@ struct DownloadQueueEntry: Codable, Equatable, Identifiable, Sendable {
     var resources: [DownloadResourceDescriptor]? = nil
     var enqueuedAt: Date? = nil
     var waitingReason: DownloadWaitingReason? = nil
+    var subtitleUpdateRecord: DownloadRecord? = nil
     var id: UUID { metadata.recordID }
 
     var activeDownload: ActiveDownload? {
@@ -127,6 +128,7 @@ enum DownloadOwnership {
 
     static func sameRendition(_ left: DownloadTaskMetadata, _ right: DownloadTaskMetadata) -> Bool {
         canonicalServer(left.serverOrigin) == canonicalServer(right.serverOrigin)
+            && (left.subtitlesOnly == true) == (right.subtitlesOnly == true)
             && left.accountUsername == right.accountUsername
             && left.mediaID == right.mediaID
             && left.kind == right.kind

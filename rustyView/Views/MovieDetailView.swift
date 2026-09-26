@@ -305,6 +305,7 @@ struct MovieDetailView: View {
             downloadControl(item)
             } else if let record = localRecord {
                 savedCopySummary(record)
+                OfflineSubtitleDownloadStatus(record: record)
                 if !record.isReadyToWatch {
                     Text(record.validationMessage ?? record.readinessMessage).font(.callout)
                     Button("Try Offline Playback") { app.playOffline(record, start: .resume) }
@@ -345,6 +346,7 @@ struct MovieDetailView: View {
                 }
             }
             if let record = localRecord ?? app.downloads.record(for: mediaID) {
+                DownloadSubtitlesAction(record: record)
                 let key = app.key(for: record)
                 let copies = DownloadMovieGroup.collect(records: app.downloads.completed, transfers: app.downloads.active)
                     .first { $0.key == key }?.copyCount ?? 0
@@ -375,6 +377,9 @@ struct MovieDetailView: View {
         VStack(alignment: .leading, spacing: 6) {
             DisclosureGroup {
                 downloadSelections(quality: record.videoQualityDescription, audio: record.audioSelectionDescription)
+                let subtitleCount = record.localCaptions?.count ?? 0
+                Text("\(subtitleCount) subtitle file\(subtitleCount == 1 ? "" : "s") saved")
+                    .fixedSize(horizontal: false, vertical: true)
             } label: {
                 VStack(alignment: .leading, spacing: 4) {
                     Label("Copy details",

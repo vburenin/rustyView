@@ -851,6 +851,297 @@ final class DownloadStorageTransactionTests: XCTestCase {
         print("STORAGE_BENCHMARK synthetic_records=500 legacy_encode=\(encodeElapsed) legacy_decode=\(decodeElapsed) atomic_save=\(saveElapsed) actor_restore=\(restoreElapsed) main_actor_progressed_during_io=true")
     }
 
+    func testSubtitleOnlyUpdatePreservesPlayableVideoAndCommitsAllLanguagesAfterRelaunch() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DownloadManifestStore(rootDirectory: root.appendingPathComponent("offline"))
+        let coordinator = DownloadStorageCoordinator(store: store)
+        let original = entry()
+        _ = try await coordinator.enqueue(original)
+        let installed = try await deliver(.media, entry: original, coordinator: coordinator, root: root)
+        let before = try XCTUnwrap(installed.records.first)
+        let videoURL = store.localURL(for: before)
+        let bytes = try Data(contentsOf: videoURL)
+        let attributes = try FileManager.default.attributesOfItem(atPath: videoURL.path)
+        let update = subtitleUpdate(before, count: 2)
+        let queued = try await coordinator.enqueueSubtitleUpdate(update)
+        XCTAssertTrue(try XCTUnwrap(queued.records.first).isReadyToWatch)
+        XCTAssertTrue(try XCTUnwrap(update.resources).allSatisfy { $0.resource.kind == .caption })
+        _ = try await deliver(.caption, entry: update, coordinator: coordinator, root: root)
+        let reopened = DownloadStorageCoordinator(store: store)
+        let restored = try await reopened.restore()
+        XCTAssertEqual(restored.records.first?.localCaptions?.count, 0, "One delivered track must not publish a partial subtitle update")
+        let pending = try XCTUnwrap(restored.queue.first)
+        let second = try XCTUnwrap(pending.resources?.last)
+        let temp = root.appendingPathComponent(UUID().uuidString)
+        try Data("WEBVTT\n\n00:00.000 --> 00:02.000\nLa lune synthetique\n".utf8).write(to: temp)
+        let receipt = try reopened.stageTemporaryFile(temporaryURL: temp, metadata: pending.metadata,
+            resourceID: second.id, transferID: second.transferID)
+        let completed = try await reopened.receive(receipt)
+        let saved = try XCTUnwrap(completed.records.first)
+        XCTAssertTrue(saved.isReadyToWatch)
+        XCTAssertEqual(saved.localCaptions?.map(\.language), ["en", "fr"])
+        XCTAssertEqual(saved.localCaptions?.last?.isForced, true)
+        XCTAssertEqual(saved.localCaptions?.last?.serverIndex, 4_294_967_298)
+        XCTAssertEqual(store.localURL(for: saved), videoURL)
+        XCTAssertEqual(try Data(contentsOf: videoURL), bytes)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: videoURL.path)[.modificationDate] as? Date, attributes[.modificationDate] as? Date)
+        let final = try await DownloadStorageCoordinator(store: store).restore()
+        XCTAssertEqual(final.records.first?.localCaptions?.count, 2)
+        XCTAssertEqual(final.queue.first?.state, .completed)
+        for caption in saved.localCaptions ?? [] {
+            let url = try XCTUnwrap(store.captionURL(for: saved, caption: caption))
+            XCTAssertEqual(try WebVTTParser.parse(Data(contentsOf: url)).count, 1)
+        }
+    }
+
+    func testSubtitleUpdateRecoversEachCommitBoundaryAndCancellationPreservesVideo() async throws {
+        for boundary in [DownloadStorageBoundary.transactionWritten, .packageMoved, .indexCommitted] {
+            for cancel in [false, true] {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let store = DownloadManifestStore(rootDirectory: root.appendingPathComponent("offline"))
+                let coordinator = DownloadStorageCoordinator(store: store)
+                let original = entry()
+                _ = try await coordinator.enqueue(original)
+                let installed = try await deliver(.media, entry: original, coordinator: coordinator, root: root)
+                let before = try XCTUnwrap(installed.records.first)
+                let update = subtitleUpdate(before)
+                _ = try await coordinator.enqueueSubtitleUpdate(update)
+                let interrupted = DownloadStorageCoordinator(store: store) { reached in
+                    if reached == boundary { throw DownloadStorageFailure.interrupted }
+                }
+                do {
+                    _ = try await deliver(.caption, entry: update, coordinator: interrupted, root: root)
+                    XCTFail("Expected interruption at \(boundary)")
+                } catch DownloadStorageFailure.interrupted { }
+                let reopened = DownloadStorageCoordinator(store: store)
+                if cancel { _ = try await reopened.cancel(recordID: before.id) }
+                let recovered = try await reopened.restore()
+                let record = try XCTUnwrap(recovered.records.first)
+                XCTAssertTrue(record.isReadyToWatch)
+                XCTAssertEqual(try Data(contentsOf: store.localURL(for: record)), try OfflineMediaFixture.validData())
+                let shouldHaveCaptions = !cancel || boundary == .indexCommitted
+                XCTAssertEqual(record.localCaptions?.count, shouldHaveCaptions ? 1 : 0)
+                XCTAssertTrue(recovered.transactions.isEmpty)
+                XCTAssertTrue(recovered.receipts.isEmpty)
+                let again = try await reopened.restore()
+                XCTAssertEqual(again.records, recovered.records)
+            }
+        }
+    }
+
+    func testDeletingDuringSubtitleUpdateRejectsLateCaptionWithoutResurrectingMovie() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DownloadManifestStore(rootDirectory: root.appendingPathComponent("offline"))
+        let coordinator = DownloadStorageCoordinator(store: store)
+        let original = entry()
+        _ = try await coordinator.enqueue(original)
+        let installed = try await deliver(.media, entry: original, coordinator: coordinator, root: root)
+        let before = try XCTUnwrap(installed.records.first)
+        let update = subtitleUpdate(before)
+        _ = try await coordinator.enqueueSubtitleUpdate(update)
+        _ = try await coordinator.delete(recordID: before.id)
+        let late = try await deliver(.caption, entry: update, coordinator: coordinator, root: root)
+        XCTAssertTrue(late.records.isEmpty)
+        XCTAssertEqual(late.queue.first?.state, .deleted)
+        let reopened = try await DownloadStorageCoordinator(store: store).restore()
+        XCTAssertTrue(reopened.records.isEmpty)
+    }
+
+    func testSubtitleUpdateKeepsLegacyTrackIdentityEvenWhenTheServerNoLongerAdvertisesIt() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DownloadManifestStore(rootDirectory: root.appendingPathComponent("offline"))
+        let coordinator = DownloadStorageCoordinator(store: store)
+        let original = entry(caption: true)
+        _ = try await coordinator.enqueue(original)
+        _ = try await deliver(.media, entry: original, coordinator: coordinator, root: root)
+        let installed = try await deliver(.caption, entry: original, coordinator: coordinator, root: root)
+        var old = try XCTUnwrap(installed.records.first)
+        old.localCaptions?[0].remotePath = nil
+        old.localCaptions?[0].serverIndex = nil
+        _ = try store.stateStore.update { $0.records = [old] }
+        let update = subtitleUpdate(old)
+        _ = try await coordinator.enqueueSubtitleUpdate(update)
+        let completed = try await deliver(.caption, entry: update, coordinator: coordinator, root: root)
+        let saved = try XCTUnwrap(completed.records.first)
+        XCTAssertEqual(saved.localCaptions?.count, 2)
+        XCTAssertEqual(saved.localCaptions?.first?.remotePath, "/Captions/42048/0.vtt?format=webvtt")
+        XCTAssertEqual(saved.localCaptions?.first?.serverIndex, 0)
+        XCTAssertNotNil(store.captionURL(for: saved, caption: try XCTUnwrap(saved.localCaptions?.first)))
+    }
+
+    func testLegacySingleFileCanAddSubtitlesAndDeletesTheirOwnedFilesWithTheMovie() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DownloadManifestStore(rootDirectory: root.appendingPathComponent("offline"))
+        let coordinator = DownloadStorageCoordinator(store: store)
+        let temporary = root.appendingPathComponent("legacy.tmp")
+        let bytes = try OfflineMediaFixture.validData()
+        try bytes.write(to: temporary)
+        let original = try store.install(temporaryURL: temporary, metadata: entry().metadata, expectedByteCount: Int64(bytes.count))
+        XCTAssertNil(original.packageDirectoryName)
+        let update = subtitleUpdate(original)
+        _ = try await coordinator.enqueueSubtitleUpdate(update)
+        let completed = try await deliver(.caption, entry: update, coordinator: coordinator, root: root)
+        let saved = try XCTUnwrap(completed.records.first)
+        let caption = try XCTUnwrap(saved.localCaptions?.first)
+        let captionURL = try XCTUnwrap(store.captionURL(for: saved, caption: caption))
+        XCTAssertEqual(try WebVTTParser.parse(Data(contentsOf: captionURL)).count, 1)
+        XCTAssertEqual(try Data(contentsOf: store.localURL(for: saved)), bytes)
+        let inventory = try await coordinator.inventory()
+        XCTAssertEqual(inventory.reduce(Int64(0)) { $0 + $1.byteCount }, Int64(bytes.count + (try Data(contentsOf: captionURL)).count))
+        _ = try await coordinator.delete(recordID: saved.id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captionURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.localURL(for: saved).path))
+        let emptyInventory = try await coordinator.inventory()
+        XCTAssertTrue(emptyInventory.isEmpty)
+    }
+
+    func testDeleteAfterInterruptedSubtitleCommitCleansReceiptsAndDoesNotRecoverDeletedFiles() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DownloadManifestStore(rootDirectory: root.appendingPathComponent("offline"))
+        let coordinator = DownloadStorageCoordinator(store: store)
+        let original = entry()
+        _ = try await coordinator.enqueue(original)
+        let installed = try await deliver(.media, entry: original, coordinator: coordinator, root: root)
+        let record = try XCTUnwrap(installed.records.first)
+        let update = subtitleUpdate(record)
+        _ = try await coordinator.enqueueSubtitleUpdate(update)
+        let interrupted = DownloadStorageCoordinator(store: store) { boundary in
+            if boundary == .indexCommitted { throw DownloadStorageFailure.interrupted }
+        }
+        do { _ = try await deliver(.caption, entry: update, coordinator: interrupted, root: root); XCTFail("Expected interruption") }
+        catch DownloadStorageFailure.interrupted { }
+        _ = try await coordinator.delete(recordID: record.id)
+        let final = try await coordinator.restore()
+        XCTAssertTrue(final.records.isEmpty)
+        XCTAssertTrue(final.transactions.isEmpty)
+        XCTAssertTrue(final.receipts.isEmpty)
+        let inventory = try await coordinator.inventory()
+        XCTAssertTrue(inventory.isEmpty)
+    }
+
+    func testRepairingSubtitleFilesReplacesTracksWithoutDuplicatingSavedChoices() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DownloadManifestStore(rootDirectory: root.appendingPathComponent("offline"))
+        let coordinator = DownloadStorageCoordinator(store: store)
+        let original = entry()
+        _ = try await coordinator.enqueue(original)
+        let installed = try await deliver(.media, entry: original, coordinator: coordinator, root: root)
+        let first = subtitleUpdate(try XCTUnwrap(installed.records.first))
+        _ = try await coordinator.enqueueSubtitleUpdate(first)
+        let updated = try await deliver(.caption, entry: first, coordinator: coordinator, root: root)
+        let before = try XCTUnwrap(updated.records.first)
+        let oldCaption = try XCTUnwrap(before.localCaptions?.first)
+        let oldURL = try XCTUnwrap(store.captionURL(for: before, caption: oldCaption))
+        let repair = subtitleUpdate(before)
+        _ = try await coordinator.enqueueSubtitleUpdate(repair)
+        let replaced = try await deliver(.caption, entry: repair, coordinator: coordinator, root: root)
+        let after = try XCTUnwrap(replaced.records.first)
+        XCTAssertEqual(after.localCaptions?.count, 1)
+        XCTAssertNotEqual(after.localCaptions?.first?.id, oldCaption.id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldURL.path))
+        XCTAssertTrue(after.isReadyToWatch)
+    }
+
+    func testMissingSubtitleAssemblyDoesNotBlockRestorationAndCanRetryWithoutVideo() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DownloadManifestStore(rootDirectory: root.appendingPathComponent("offline"))
+        let coordinator = DownloadStorageCoordinator(store: store)
+        let original = entry()
+        _ = try await coordinator.enqueue(original)
+        let installed = try await deliver(.media, entry: original, coordinator: coordinator, root: root)
+        let record = try XCTUnwrap(installed.records.first)
+        let video = try Data(contentsOf: store.localURL(for: record))
+        let update = subtitleUpdate(record)
+        _ = try await coordinator.enqueueSubtitleUpdate(update)
+        let interrupted = DownloadStorageCoordinator(store: store) { boundary in
+            if boundary == .packageMoved { throw DownloadStorageFailure.interrupted }
+        }
+        do { _ = try await deliver(.caption, entry: update, coordinator: interrupted, root: root); XCTFail("Expected interruption") }
+        catch DownloadStorageFailure.interrupted { }
+        let pending = try await coordinator.snapshot()
+        let transaction = try XCTUnwrap(pending.transactions.first)
+        try FileManager.default.removeItem(at: store.rootDirectory.appendingPathComponent(transaction.sourceName))
+        let restored = try await coordinator.restore()
+        XCTAssertEqual(restored.records, installed.records)
+        XCTAssertTrue(restored.transactions.isEmpty)
+        XCTAssertTrue(restored.receipts.isEmpty)
+        var retry = try XCTUnwrap(restored.queue.first { $0.id == record.id })
+        XCTAssertEqual(retry.state, .failed)
+        retry.state = .queued
+        retry.reason = nil
+        for index in retry.resources?.indices ?? 0..<0 {
+            retry.resources?[index].state = .queued
+            retry.resources?[index].transferID = UUID()
+        }
+        _ = try await coordinator.update(retry, expectedAttemptID: update.metadata.attemptID)
+        let ready = try await deliver(.caption, entry: retry, coordinator: coordinator, root: root)
+        let saved = try XCTUnwrap(ready.records.first)
+        XCTAssertEqual(saved.localCaptions?.count, 1)
+        XCTAssertTrue(saved.isReadyToWatch)
+        XCTAssertEqual(try Data(contentsOf: store.localURL(for: saved)), video)
+    }
+
+    func testSubtitleAssemblySymlinkCannotReadOrRemoveOutsideCaptionFiles() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DownloadManifestStore(rootDirectory: root.appendingPathComponent("offline"))
+        let coordinator = DownloadStorageCoordinator(store: store)
+        let original = entry()
+        _ = try await coordinator.enqueue(original)
+        let installed = try await deliver(.media, entry: original, coordinator: coordinator, root: root)
+        let record = try XCTUnwrap(installed.records.first)
+        let update = subtitleUpdate(record)
+        _ = try await coordinator.enqueueSubtitleUpdate(update)
+        let interrupted = DownloadStorageCoordinator(store: store) { boundary in
+            if boundary == .transactionWritten { throw DownloadStorageFailure.interrupted }
+        }
+        do { _ = try await deliver(.caption, entry: update, coordinator: interrupted, root: root); XCTFail("Expected interruption") }
+        catch DownloadStorageFailure.interrupted { }
+        let pending = try await coordinator.snapshot()
+        let transaction = try XCTUnwrap(pending.transactions.first)
+        let stage = store.rootDirectory.appendingPathComponent(transaction.sourceName)
+        let outside = root.appendingPathComponent("outside-caption-package")
+        try FileManager.default.moveItem(at: stage, to: outside)
+        try FileManager.default.createSymbolicLink(at: stage, withDestinationURL: outside)
+        let caption = try XCTUnwrap(transaction.record.localCaptions?.first)
+        let outsideCaption = outside.appendingPathComponent(caption.fileName)
+        let bytes = try Data(contentsOf: outsideCaption)
+        let restored = try await coordinator.restore()
+        XCTAssertEqual(restored.records, installed.records)
+        XCTAssertEqual(restored.queue.first { $0.id == record.id }?.state, .failed)
+        XCTAssertTrue(restored.transactions.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stage.path))
+        XCTAssertEqual(try Data(contentsOf: outsideCaption), bytes)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: try XCTUnwrap(store.packageURL(for: record)).appendingPathComponent(caption.fileName).path))
+    }
+
+    private func subtitleUpdate(_ record: DownloadRecord, count: Int = 1) -> DownloadQueueEntry {
+        var metadata = DownloadTaskMetadata(recordID: record.id, serverOrigin: record.serverOrigin, mediaID: record.mediaID,
+            title: record.title, kind: record.kind, fileExtension: "mp4", durationSeconds: 2, resolution: record.resolution,
+            attemptID: UUID(), accountUsername: record.accountUsername)
+        metadata.subtitlesOnly = true
+        var movie = record.movieMetadata
+        movie.captions = (0..<count).map { index in
+            MovieCaption(CaptionTrack(index: 4_294_967_297 + index, label: index == 0 ? "English" : "French", language: index == 0 ? "en" : "fr",
+                default: index == 0, sourceFormat: "subrip", browserSupported: true,
+                url: "/Captions/42048/embedded/\(index + 1).vtt", forced: index == 1, embedded: true))
+        }
+        let resources = OfflinePackagePlan(metadata: metadata, movie: movie).resources.filter { $0.kind == .caption }
+        var update = DownloadQueueEntry(metadata: metadata)
+        update.packagePlan = OfflinePackagePlan(movie: movie, resources: resources)
+        update.resources = resources.map { DownloadResourceDescriptor(resource: $0) }
+        update.subtitleUpdateRecord = record
+        return update
+    }
+
     private func temporaryRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

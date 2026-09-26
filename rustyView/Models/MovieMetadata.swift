@@ -92,7 +92,7 @@ struct MovieCaption: Codable, Hashable, Sendable, Identifiable {
         label = caption.label
         language = caption.language
         isDefault = caption.default
-        isForced = nil
+        isForced = caption.forced
         remotePath = caption.url
         supportedSidecar = caption.isPlayableOnDevice
     }
@@ -126,6 +126,8 @@ struct OfflineCaption: Codable, Hashable, Sendable, Identifiable {
     let isDefault: Bool
     let isForced: Bool?
     let fileName: String
+    var serverIndex: Int? = nil
+    var remotePath: String? = nil
 }
 
 enum OfflineResourceKind: String, Codable, Hashable, Sendable {
@@ -153,6 +155,11 @@ struct OfflinePackagePlan: Codable, Hashable, Sendable {
     let movie: MovieMetadata
     let resources: [OfflineResource]
 
+    init(movie: MovieMetadata, resources: [OfflineResource]) {
+        self.movie = movie
+        self.resources = resources
+    }
+
     init(metadata: DownloadTaskMetadata, movie: MovieMetadata) {
         self.movie = movie
         var resources = [OfflineResource(id: metadata.recordID, kind: .media,
@@ -163,7 +170,8 @@ struct OfflinePackagePlan: Codable, Hashable, Sendable {
             let id = UUID()
             let fileName = "caption-\(id.uuidString.lowercased()).vtt"
             let local = OfflineCaption(id: id, label: caption.label, language: caption.language,
-                                       isDefault: caption.isDefault, isForced: caption.isForced, fileName: fileName)
+                                       isDefault: caption.isDefault, isForced: caption.isForced, fileName: fileName,
+                                       serverIndex: caption.serverIndex, remotePath: remotePath)
             resources.append(OfflineResource(id: id, kind: .caption, remotePath: remotePath,
                                               fileName: fileName, required: true, caption: local))
         }

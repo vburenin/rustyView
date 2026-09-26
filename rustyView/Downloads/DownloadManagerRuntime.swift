@@ -300,6 +300,60 @@ final class DownloadManager: ObservableObject {
         }
     }
 
+    @discardableResult
+    func downloadMissingSubtitles(for record: DownloadRecord, item: MediaItem, client: RustyDLNAClient) throws -> Int {
+        guard let connection, let owner = client.connection,
+              connection.owns(serverIdentity: record.serverOrigin, accountUsername: record.accountUsername),
+              owner.owns(serverIdentity: record.serverOrigin, accountUsername: record.accountUsername),
+              item.id == record.mediaID else { throw DownloadQueueError.missingOwnership }
+        guard storageIsReadable else { throw DownloadQueueError.invalidJournal }
+        guard completed.contains(record), !active.contains(where: { $0.id == record.id }) else {
+            throw DownloadStorageFailure.staleAttempt
+        }
+        var metadata = DownloadTaskMetadata(recordID: record.id, serverOrigin: record.serverOrigin,
+            mediaID: record.mediaID, title: record.title, kind: record.kind,
+            fileExtension: (record.fileName as NSString).pathExtension,
+            durationSeconds: record.durationSeconds, resolution: record.resolution,
+            attemptID: UUID(), qualityID: record.qualityID, qualityLabel: record.qualityLabel,
+            audioTrackIndex: record.audioTrackIndex, audioTrackLabel: record.audioTrackLabel,
+            accountUsername: record.accountUsername, movie: MovieMetadata(item: item),
+            videoOutput: record.videoOutput, downloadAudio: record.downloadAudio)
+        metadata.subtitlesOnly = true
+        let movie = MovieMetadata(item: item)
+        let advertised = OfflinePackagePlan(metadata: metadata, movie: movie)
+        let legacyTracks = (record.movie?.captions ?? []).filter(\.supportedSidecar)
+        let saved = record.localCaptions ?? []
+        let missing = advertised.resources.filter { resource in
+            guard resource.kind == .caption, let caption = resource.caption else { return false }
+            if record.packageIssue != nil { return true }
+            return !saved.enumerated().contains { index, local in
+                if let path = local.remotePath { return path == caption.remotePath }
+                if let serverIndex = local.serverIndex { return serverIndex == caption.serverIndex }
+                // Old packages saved sidecars in the same order as their owned
+                // metadata. Do not guess across mismatched inventories.
+                return legacyTracks.count == saved.count && legacyTracks[index].remotePath == caption.remotePath
+            }
+        }
+        guard !missing.isEmpty else { return 0 }
+        for resource in missing { _ = try client.authorizedRequest(serverPath: resource.remotePath) }
+        var update = DownloadQueueEntry(metadata: metadata)
+        update.packagePlan = OfflinePackagePlan(movie: movie, resources: missing)
+        update.resources = missing.map { DownloadResourceDescriptor(resource: $0) }
+        update.subtitleUpdateRecord = record
+        update.enqueuedAt = Date()
+        provisional[record.id] = update
+        publish()
+        let intent = update
+        enqueueOperation { [weak self] in
+            guard let self else { return }
+            self.apply(try await self.storage.enqueueSubtitleUpdate(intent))
+            self.provisional.removeValue(forKey: intent.id)
+            self.publish()
+            try await self.schedule()
+        }
+        return missing.count
+    }
+
     func pause(_ download: ActiveDownload) {
         guard let entry = entry(download.id), !entry.state.isTerminal,
               !pendingCancellations.contains(entry.id),
@@ -353,6 +407,16 @@ final class DownloadManager: ObservableObject {
     func retry(_ download: ActiveDownload) {
         enqueueOperation { [weak self] in
             guard let self, var entry = self.entry(download.id), entry.state == .failed else { return }
+            if var intent = self.provisional[download.id], intent.metadata.subtitlesOnly == true {
+                intent.state = .queued
+                intent.failure = nil
+                intent.reason = nil
+                self.apply(try await self.storage.enqueueSubtitleUpdate(intent))
+                self.provisional.removeValue(forKey: intent.id)
+                self.publish()
+                try await self.schedule()
+                return
+            }
             if entry.resources?.contains(where: { $0.verificationPending == true }) == true {
                 self.setVisiblePhase(entry.id, .finishing)
                 do { self.apply(try await self.storage.retryVerification(recordID: entry.id)) }
@@ -425,6 +489,7 @@ final class DownloadManager: ObservableObject {
             if self.provisional[download.id] != nil { await previous?.value }
             do {
                 self.apply(try await self.storage.cancel(recordID: download.id))
+                self.provisional.removeValue(forKey: download.id)
                 await self.cancelTransfers(entry)
                 self.cancelPreparedRequest(entry.metadata)
             } catch {
@@ -449,6 +514,8 @@ final class DownloadManager: ObservableObject {
             guard let self else { return }
             if let entry = self.entry(record.id) { await self.cancelTransfers(entry) }
             self.apply(try await self.storage.delete(recordID: record.id))
+            self.provisional.removeValue(forKey: record.id)
+            self.publish()
             try await self.schedule()
         }
     }
@@ -635,7 +702,7 @@ final class DownloadManager: ObservableObject {
             resource.state = .failed
             if resource.resource.required || previousFailure != nil { entry.state = .failed }
         }
-        if resource.resource.kind == .media {
+        if resource.resource.kind == .media || entry.metadata.subtitlesOnly == true {
             entry.metadata.retryAttempt = resource.retryAttempt
             entry.scheduledAt = resource.scheduledAt
         }
@@ -804,6 +871,7 @@ final class DownloadManager: ObservableObject {
             guard let connection, DownloadOwnership.matches(entry.metadata, connection: connection) else { throw DownloadQueueError.missingOwnership }
             let url = try connection.resolve(serverPath: resource.serverPath)
             var request = URLRequest(url: url)
+            if resource.resource.kind == .caption { request.timeoutInterval = RustyDLNAClient.captionPreparationTimeout }
             request.setValue(connection.authorizationHeader(), forHTTPHeaderField: "Authorization")
             request.setValue(resource.resource.kind == .media ? "video/*, application/octet-stream" : "*/*", forHTTPHeaderField: "Accept")
             if resource.resource.kind == .media, entry.metadata.kind == .compatible {
@@ -846,6 +914,7 @@ final class DownloadManager: ObservableObject {
                   let envelope = DownloadTaskEnvelope.decode(task.taskDescription) else { task.cancel(); continue }
             var entry = entry(envelope.metadata.recordID)
             if entry == nil {
+                guard envelope.metadata.subtitlesOnly != true else { task.cancel(); continue }
                 guard !renditions.contains(where: { DownloadOwnership.sameRendition($0, envelope.metadata) }) else { task.cancel(); continue }
                 var legacy = DownloadQueueEntry(metadata: envelope.metadata)
                 legacy.scheduledAt = task.earliestBeginDate
@@ -1010,7 +1079,7 @@ final class DownloadManager: ObservableObject {
             }
         }
     }
-    private func entry(_ id: UUID) -> DownloadQueueEntry? { journal.first { $0.id == id } ?? provisional[id] }
+    private func entry(_ id: UUID) -> DownloadQueueEntry? { provisional[id] ?? journal.first { $0.id == id } }
     private func owned(_ envelope: DownloadTaskEnvelope) -> (DownloadQueueEntry, DownloadResourceDescriptor)? {
         guard !pendingCancellations.contains(envelope.metadata.recordID),
               let entry = entry(envelope.metadata.recordID), !entry.state.isTerminal,
@@ -1254,7 +1323,7 @@ final class DownloadManager: ObservableObject {
         return DownloadPollSchedule(transferID: transferID)
     }
     private func cancelPreparedRequest(_ metadata: DownloadTaskMetadata) {
-        guard metadata.kind == .compatible, let path = metadata.serverPath, let connection,
+        guard metadata.subtitlesOnly != true, metadata.kind == .compatible, let path = metadata.serverPath, let connection,
               DownloadOwnership.matches(metadata, connection: connection) else { return }
         let client = RustyDLNAClient(configuration: .ephemeral)
         client.configure(connection)

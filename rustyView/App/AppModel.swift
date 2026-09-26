@@ -21,6 +21,10 @@ final class AppModel: ObservableObject {
     @Published var showingCompatibilityHelp = false
     @Published var presentedError: UserFacingError?
     @Published var connectionError: UserFacingError?
+    @Published private(set) var subtitleChecks: Set<UUID> = []
+    @Published private(set) var subtitleDownloadNotices: [UUID: String] = [:]
+    private var subtitleCheckTasks: [UUID: Task<Void, Never>] = [:]
+    private var subtitleCheckIDs: [UUID: UUID] = [:]
     private var childObservers: Set<AnyCancellable> = []
     private var connectionEpoch = 0
     private var savedPlaybackEpoch = 0
@@ -230,6 +234,48 @@ final class AppModel: ObservableObject {
         }
         player.play(.offline(record: record, url: downloads.localURL(for: record),
                              captionSources: captionSources, start: start))
+    }
+
+    func downloadMissingSubtitles(_ record: DownloadRecord) {
+        guard !subtitleChecks.contains(record.id) else { return }
+        let request = UUID()
+        subtitleCheckIDs[record.id] = request
+        subtitleChecks.insert(record.id)
+        subtitleDownloadNotices[record.id] = nil
+        subtitleCheckTasks[record.id] = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.subtitleCheckIDs[record.id] == request {
+                    self.subtitleChecks.remove(record.id)
+                    self.subtitleCheckTasks[record.id] = nil
+                    self.subtitleCheckIDs[record.id] = nil
+                }
+            }
+            do {
+                let owner = try self.client.ownedConnection()
+                guard owner.connection?.owns(serverIdentity: record.serverOrigin, accountUsername: record.accountUsername) == true else {
+                    throw DownloadQueueError.missingOwnership
+                }
+                let item = try await owner.item(id: record.mediaID)
+                try Task.checkCancellation()
+                guard self.subtitleCheckIDs[record.id] == request else { return }
+                let count = try self.downloads.downloadMissingSubtitles(for: record, item: item, client: owner)
+                let unavailable = item.captions.filter { !$0.isPlayableOnDevice }.count
+                let limitation = unavailable > 0 ? " \(unavailable) unsupported track\(unavailable == 1 ? " is" : "s are") unavailable offline."
+                    : item.embeddedCaptionsComplete == nil ? " This server may not expose embedded subtitles." : ""
+                self.subtitleDownloadNotices[record.id] = (count > 0 ? "" : item.captions.isEmpty
+                    ? "No downloadable subtitles are available." : "All available subtitles are already saved.") + limitation
+            } catch {
+                guard !Task.isCancelled, self.subtitleCheckIDs[record.id] == request else { return }
+                self.subtitleDownloadNotices[record.id] = UserFacingError(error).message
+            }
+        }
+    }
+
+    func cancelSubtitleCheck(_ recordID: UUID) {
+        subtitleCheckTasks.removeValue(forKey: recordID)?.cancel()
+        subtitleCheckIDs[recordID] = nil
+        subtitleChecks.remove(recordID)
     }
 
     func playSaved(_ key: MovieLibraryKey, start: PlaybackStart = .resume) async throws {

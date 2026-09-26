@@ -740,7 +740,7 @@ final class PlaybackModel: ObservableObject {
     var subtitleOptions: [PlaybackSubtitleOption] {
         let serverOptions = (item?.captions ?? []).map {
             PlaybackSubtitleOption(selection: .init(id: "server-\($0.index)", label: $0.label, delivery: .appOverlay),
-                source: .server(index: $0.index), language: $0.language, isForced: false, isAvailable: $0.isPlayableOnDevice)
+                source: .server(index: $0.index), language: $0.language, isForced: $0.forced == true, isAvailable: $0.isPlayableOnDevice)
         }
         let nativeOptions = localSubtitleTracks.compactMap { track -> PlaybackSubtitleOption? in
             if nativeSubtitleOptions[track.id] != nil {
@@ -819,7 +819,9 @@ final class PlaybackModel: ObservableObject {
                 guard let path = item?.captions.first(where: { $0.index == index })?.url else { throw SubtitleError.invalidFormat }
                 let owner = try (viewingSession?.client ?? client).ownedConnection()
                 task = Task {
-                    let data = try await owner.data(serverPath: path)
+                    var request = try owner.authorizedRequest(serverPath: path)
+                    request.timeoutInterval = RustyDLNAClient.captionPreparationTimeout
+                    let data = try await owner.data(for: request)
                     try Task.checkCancellation()
                     return try await Task.detached(priority: .userInitiated) { try WebVTTParser.parse(data) }.value
                 }
@@ -1102,7 +1104,7 @@ final class PlaybackModel: ObservableObject {
                     return
                 }
             }
-            let defaultServer = item?.captions.first { $0.default && $0.isPlayableOnDevice }.map { "server-\($0.index)" }
+            let defaultServer = item?.captions.first { ($0.default || $0.forced == true) && $0.isPlayableOnDevice }.map { "server-\($0.index)" }
             let defaultLocal = localSource?.captions.first { $0.caption.isDefault || $0.caption.isForced == true }?.id.uuidString
             if let id = defaultServer ?? defaultLocal { await selectSubtitle(id: id, rememberPreference: false) }
             return

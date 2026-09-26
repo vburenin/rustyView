@@ -115,6 +115,24 @@ actor DownloadStorageCoordinator {
         }
     }
 
+    func enqueueSubtitleUpdate(_ entry: DownloadQueueEntry) throws -> DownloadStorageSnapshot {
+        try recoverTransactions()
+        return try disk.update { snapshot in
+            guard entry.metadata.subtitlesOnly == true, let previous = entry.subtitleUpdateRecord,
+                  entry.metadata.attemptID != nil, entry.metadata.attemptID != previous.installedAttemptID,
+                  snapshot.records.contains(previous), previous.accountUsername != nil,
+                  entry.id == previous.id, entry.metadata.mediaID == previous.mediaID,
+                  entry.metadata.serverOrigin == previous.serverOrigin,
+                  entry.metadata.accountUsername == previous.accountUsername,
+                  validResources(entry.resources ?? [], subtitlesOnly: true),
+                  !snapshot.queue.contains(where: { $0.id == entry.id && !$0.state.isTerminal }) else {
+                throw DownloadStorageFailure.staleAttempt
+            }
+            snapshot.queue.removeAll { $0.id == entry.id }
+            snapshot.queue.append(entry)
+        }
+    }
+
     func update(_ entry: DownloadQueueEntry, expectedAttemptID: UUID?) throws -> DownloadStorageSnapshot {
         try disk.update { snapshot in
             guard let index = snapshot.queue.firstIndex(where: { $0.id == entry.id }),
@@ -141,6 +159,7 @@ actor DownloadStorageCoordinator {
         var receipt = original
         var current = try disk.load()
         if !current.queue.contains(where: { $0.id == receipt.metadata.recordID }) {
+            guard receipt.metadata.subtitlesOnly != true else { try ingress.remove(receipt); return current }
             let movie = receipt.metadata.movie ?? MovieMetadata(mediaID: receipt.metadata.mediaID, title: receipt.metadata.title,
                                                                durationSeconds: receipt.metadata.durationSeconds.map(Double.init), resolution: receipt.metadata.resolution)
             let plan = OfflinePackagePlan(metadata: receipt.metadata, movie: movie)
@@ -157,7 +176,7 @@ actor DownloadStorageCoordinator {
             try ingress.remove(receipt)
             return current
         }
-        guard validResources(entry.resources ?? []) else { throw DownloadStorageFailure.invalidComponent }
+        guard validResources(entry.resources ?? [], subtitlesOnly: entry.metadata.subtitlesOnly == true) else { throw DownloadStorageFailure.invalidComponent }
         if let range = receipt.byteRange {
             return try await receiveRange(receipt, range: range, entry: entry, resource: resource, payload: payload)
         }
@@ -369,8 +388,9 @@ actor DownloadStorageCoordinator {
         guard let entry = snapshot.queue.first(where: { $0.id == recordID }), !entry.state.isTerminal,
               entry.state != .paused, entry.state != .pausing, entry.state != .failed,
               let plan = entry.packagePlan, let resources = entry.resources,
-              resources.allSatisfy({ $0.state == .delivered || (!$0.resource.required && $0.state == .failed) }),
-              let video = resources.first(where: { $0.resource.kind == .media }),
+              resources.allSatisfy({ $0.state == .delivered || (!$0.resource.required && $0.state == .failed) }) else { return snapshot }
+        if entry.metadata.subtitlesOnly == true { return try finishSubtitlePackage(entry, snapshot: snapshot) }
+        guard let video = resources.first(where: { $0.resource.kind == .media }),
               let videoReceipt = receipt(for: video, entry: entry, snapshot: snapshot),
               let videoURL = ingress.payloadURL(videoReceipt), disk.isRegularFile(videoURL),
               let inspection = videoReceipt.assetInspection else { return snapshot }
@@ -432,6 +452,123 @@ actor DownloadStorageCoordinator {
         return try disk.load()
     }
 
+    /// Add subtitles without moving, copying or reopening the video for download.
+    /// The old record stays playable until the new files and index commit together.
+    private func finishSubtitlePackage(_ entry: DownloadQueueEntry, snapshot: DownloadStorageSnapshot) throws -> DownloadStorageSnapshot {
+        guard let previous = entry.subtitleUpdateRecord, snapshot.records.contains(previous),
+              let plan = entry.packagePlan, let resources = entry.resources,
+              validResources(resources, subtitlesOnly: true), disk.isRegularFile(store.localURL(for: previous)) else {
+            throw DownloadStorageFailure.staleAttempt
+        }
+        let transactionID = UUID()
+        let stageName = "assembling-\(transactionID.uuidString.lowercased()).package"
+        let stage = store.rootDirectory.appendingPathComponent(stageName, isDirectory: true)
+        try files.createDirectory(at: stage, withIntermediateDirectories: true)
+        var updated = previous
+        // Keep every saved track that is still present, even if it disappeared remotely.
+        let saved = previous.localCaptions ?? []
+        let legacy = (previous.movie?.captions ?? []).filter(\.supportedSidecar)
+        let replacements = resources.compactMap(\.resource.caption)
+        updated.localCaptions = saved.enumerated().compactMap { index, caption in
+            guard store.captionURL(for: previous, caption: caption) != nil else { return nil }
+            var owned = caption
+            if legacy.count == saved.count {
+                owned.remotePath = owned.remotePath ?? legacy[index].remotePath
+                owned.serverIndex = owned.serverIndex ?? legacy[index].serverIndex
+            }
+            if replacements.contains(where: {
+                (owned.remotePath != nil && $0.remotePath == owned.remotePath)
+                    || (owned.serverIndex != nil && $0.serverIndex == owned.serverIndex)
+            }) { return nil }
+            return owned
+        }
+        for resource in resources {
+            guard let delivered = receipt(for: resource, entry: entry, snapshot: snapshot),
+                  let source = ingress.payloadURL(delivered), disk.isRegularFile(source),
+                  let caption = resource.resource.caption else { throw DownloadStorageFailure.missingComponent }
+            try files.copyItem(at: source, to: stage.appendingPathComponent(caption.fileName))
+            updated.localCaptions?.append(caption)
+        }
+        updated.movie = plan.movie
+        updated.packageIssue = nil
+        updated.installedAttemptID = entry.metadata.attemptID
+        let transaction = DownloadFileTransaction(id: transactionID, operation: .subtitles, record: updated,
+            sourceName: stageName, destinationName: previous.packageDirectoryName ?? previous.fileName, previousRecord: previous)
+        _ = try disk.update { $0.transactions.append(transaction) }
+        try checkpoint?(.transactionWritten)
+        try recoverSubtitleTransaction(transaction)
+        return try disk.load()
+    }
+
+    private func recoverSubtitleTransaction(_ transaction: DownloadFileTransaction) throws {
+        let snapshot = try disk.load()
+        let record = transaction.record
+        let stage = store.rootDirectory.appendingPathComponent(transaction.sourceName)
+        guard let previous = transaction.previousRecord, record.installedAttemptID != nil,
+              record.installedAttemptID != previous.installedAttemptID else { throw DownloadStoreError.invalidManifest }
+        let current = snapshot.records.first { $0.id == record.id }
+        let committed = current?.id == record.id && current?.installedAttemptID == record.installedAttemptID
+        let entry = snapshot.queue.first { $0.id == record.id }
+        let owned = entry?.metadata.attemptID == record.installedAttemptID && entry?.state.isTerminal == false
+        let directory = record.packageDirectoryName.flatMap { _ in store.packageURL(for: record) } ?? store.rootDirectory
+        guard record.packageDirectoryName == nil || store.packageURL(for: record) != nil else {
+            if current != nil { throw DownloadStoreError.invalidDownloadedFile }
+            if files.fileExists(atPath: stage.path) { try files.removeItem(at: stage) }
+            try cleanCommitted(transaction, snapshot: snapshot)
+            return
+        }
+        let added = (record.localCaptions ?? []).filter { caption in
+            !(previous.localCaptions ?? []).contains(where: { $0.fileName == caption.fileName })
+        }
+        guard added.allSatisfy({ OfflinePackagePath.isSafeLeaf($0.fileName) && $0.fileName.hasPrefix("caption-") }) else {
+            throw DownloadStoreError.invalidManifest
+        }
+        if !committed && (!owned || current != previous) {
+            for caption in added {
+                let url = directory.appendingPathComponent(caption.fileName)
+                if disk.isRegularFile(url) { try files.removeItem(at: url) }
+            }
+        } else {
+            if !committed {
+                if entry?.state == .failed || entry?.state == .paused || entry?.state == .pausing { return }
+                guard (try? files.attributesOfItem(atPath: stage.path)[.type] as? FileAttributeType) == .typeDirectory else {
+                    throw DownloadStoreError.invalidDownloadedFile
+                }
+                for caption in added {
+                    let source = stage.appendingPathComponent(caption.fileName)
+                    guard disk.isRegularFile(source) else { throw DownloadStorageFailure.missingComponent }
+                    let data = try Data(contentsOf: source)
+                    _ = try WebVTTParser.parse(data)
+                    let target = directory.appendingPathComponent(caption.fileName)
+                    if files.fileExists(atPath: target.path), !disk.isRegularFile(target) { throw DownloadStorageFailure.invalidComponent }
+                    try data.write(to: target, options: [.atomic, .completeFileProtectionUnlessOpen])
+                }
+                try checkpoint?(.packageMoved)
+                _ = try commit(transaction)
+                try checkpoint?(.indexCommitted)
+            }
+            for caption in previous.localCaptions ?? [] where !(record.localCaptions ?? []).contains(where: { $0.fileName == caption.fileName }) {
+                guard OfflinePackagePath.isSafeLeaf(caption.fileName), caption.fileName.hasPrefix("caption-"),
+                      !snapshot.records.contains(where: { $0.id != record.id && $0.packageDirectoryName == record.packageDirectoryName
+                        && $0.localCaptions?.contains(where: { $0.fileName == caption.fileName }) == true }) else { continue }
+                let old = directory.appendingPathComponent(caption.fileName)
+                if disk.isRegularFile(old) { try files.removeItem(at: old) }
+            }
+            if record.packageDirectoryName != nil {
+                try JSONEncoder().encode(record.movie).write(to: directory.appendingPathComponent("movie.json"), options: .atomic)
+                try JSONEncoder().encode(record).write(to: directory.appendingPathComponent("record.json"), options: .atomic)
+                let bytes = try directoryBytes(directory)
+                _ = try disk.update { snapshot in
+                    if let index = snapshot.records.firstIndex(where: { $0.id == record.id && $0.installedAttemptID == record.installedAttemptID }) {
+                        snapshot.records[index].packageStorageBytes = bytes
+                    }
+                }
+            }
+        }
+        if files.fileExists(atPath: stage.path) { try files.removeItem(at: stage) }
+        try cleanCommitted(transaction, snapshot: try disk.load())
+    }
+
     func cancel(recordID: UUID) throws -> DownloadStorageSnapshot {
         let before = try disk.load()
         guard before.queue.first(where: { $0.id == recordID })?.state != .completed else { return before }
@@ -459,6 +596,9 @@ actor DownloadStorageCoordinator {
     }
 
     func delete(recordID: UUID) throws -> DownloadStorageSnapshot {
+        if try disk.load().queue.contains(where: { $0.id == recordID && $0.metadata.subtitlesOnly == true && !$0.state.isTerminal }) {
+            _ = try cancel(recordID: recordID)
+        }
         let current = try disk.load()
         guard let record = current.records.first(where: { $0.id == recordID }) else { return try cancel(recordID: recordID) }
         let sourceName = record.packageDirectoryName ?? record.fileName
@@ -504,12 +644,14 @@ actor DownloadStorageCoordinator {
         let trace = DownloadPerformanceTrace.begin("Download Storage Inventory")
         defer { DownloadPerformanceTrace.end("Download Storage Inventory", trace) }
         let snapshot = try? disk.load()
-        let referenced = Set((snapshot?.records.map { $0.packageDirectoryName ?? $0.fileName } ?? [])
-            + (snapshot?.queue.flatMap { $0.resources ?? [] }.compactMap { $0.partial?.fileName } ?? []))
+        let records = snapshot?.records ?? []
+        let looseCaptions = records.filter { $0.packageDirectoryName == nil }.flatMap { ($0.localCaptions ?? []).map(\.fileName) }
+        let partials = (snapshot?.queue ?? []).flatMap { $0.resources ?? [] }.compactMap { $0.partial?.fileName }
+        let referenced = Set(records.map { $0.packageDirectoryName ?? $0.fileName } + looseCaptions + partials)
         var result: [OfflineStorageInventoryItem] = try children(store.rootDirectory).compactMap { url in
             let name = url.lastPathComponent
             guard referenced.contains(name) || name.hasPrefix("offline-") || name.hasPrefix("assembling-")
-                || name.hasPrefix("deleting-") || name.hasPrefix("partial-") else { return nil }
+                || name.hasPrefix("deleting-") || name.hasPrefix("partial-") || name.hasPrefix("caption-") else { return nil }
             let type = try files.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType
             guard type == .typeRegular || type == .typeDirectory else { return nil }
             let size = type == .typeDirectory ? try directoryBytes(url) : (try files.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
@@ -603,8 +745,9 @@ actor DownloadStorageCoordinator {
         entry.resources?.first { $0.id == id }
     }
 
-    private func validResources(_ resources: [DownloadResourceDescriptor]) -> Bool {
-        resources.filter { $0.resource.kind == .media }.count == 1
+    private func validResources(_ resources: [DownloadResourceDescriptor], subtitlesOnly: Bool = false) -> Bool {
+        (subtitlesOnly ? !resources.isEmpty && resources.allSatisfy { $0.resource.kind == .caption && $0.resource.caption != nil && $0.resource.required }
+         : resources.filter { $0.resource.kind == .media }.count == 1)
             && Set(resources.map(\.id)).count == resources.count
             && Set(resources.map { $0.resource.fileName }).count == resources.count
             && resources.allSatisfy {
@@ -640,6 +783,12 @@ actor DownloadStorageCoordinator {
                 throw DownloadStoreError.invalidManifest
             }
             guard OfflinePackagePath.isSafeLeaf(transaction.record.fileName) else { throw DownloadStoreError.invalidManifest }
+            if transaction.operation == .subtitles {
+                do { try recoverSubtitleTransaction(transaction) }
+                catch DownloadStorageFailure.missingComponent { try retireDamagedSubtitleTransaction(transaction) }
+                catch DownloadStoreError.invalidDownloadedFile { try retireDamagedSubtitleTransaction(transaction) }
+                continue
+            }
             let source = store.rootDirectory.appendingPathComponent(transaction.sourceName)
             let destination = store.rootDirectory.appendingPathComponent(transaction.destinationName)
             let snapshot = try disk.load()
@@ -648,6 +797,7 @@ actor DownloadStorageCoordinator {
                     && $0.fileName == transaction.record.fileName
             }
             do { switch transaction.operation {
+            case .subtitles: break // handled above
             case .delete:
                 if committed {
                     if !files.fileExists(atPath: source.path), files.fileExists(atPath: destination.path) {
@@ -655,6 +805,14 @@ actor DownloadStorageCoordinator {
                     }
                 } else {
                     if files.fileExists(atPath: destination.path) { try files.removeItem(at: destination) }
+                    if transaction.record.packageDirectoryName == nil {
+                        for caption in transaction.record.localCaptions ?? [] {
+                            guard OfflinePackagePath.isSafeLeaf(caption.fileName), caption.fileName.hasPrefix("caption-"),
+                                  !snapshot.records.contains(where: { $0.packageDirectoryName == nil && $0.localCaptions?.contains(where: { $0.fileName == caption.fileName }) == true }) else { continue }
+                            let url = store.rootDirectory.appendingPathComponent(caption.fileName)
+                            if disk.isRegularFile(url) { try files.removeItem(at: url) }
+                        }
+                    }
                 }
             case .install:
                 let entry = snapshot.queue.first { $0.id == transaction.record.id }
@@ -693,6 +851,36 @@ actor DownloadStorageCoordinator {
                 continue
             }
             _ = try disk.update { $0.transactions.removeAll { $0.id == transaction.id } }
+        }
+    }
+
+    private func retireDamagedSubtitleTransaction(_ transaction: DownloadFileTransaction) throws {
+        let snapshot = try disk.load()
+        let record = transaction.record
+        let committed = snapshot.records.contains { $0.id == record.id && $0.installedAttemptID == record.installedAttemptID }
+        if !committed, let previous = transaction.previousRecord {
+            let directory = record.packageDirectoryName == nil ? store.rootDirectory : store.packageURL(for: record)
+            for caption in record.localCaptions ?? [] where !(previous.localCaptions ?? []).contains(where: { $0.fileName == caption.fileName }) {
+                guard let directory, OfflinePackagePath.isSafeLeaf(caption.fileName), caption.fileName.hasPrefix("caption-") else { continue }
+                let url = directory.appendingPathComponent(caption.fileName)
+                if disk.isRegularFile(url) { try files.removeItem(at: url) }
+            }
+        }
+        let stage = store.rootDirectory.appendingPathComponent(transaction.sourceName)
+        if files.fileExists(atPath: stage.path) { try files.removeItem(at: stage) }
+        for receipt in snapshot.receipts where receipt.metadata.recordID == record.id
+            && receipt.metadata.attemptID == record.installedAttemptID { try ingress.remove(receipt) }
+        _ = try disk.update { snapshot in
+            if !committed, let index = snapshot.queue.firstIndex(where: { $0.id == record.id && $0.metadata.attemptID == record.installedAttemptID }),
+               !snapshot.queue[index].state.isTerminal {
+                snapshot.queue[index].state = .failed
+                snapshot.queue[index].reason = "The saved subtitle transfer is incomplete. Retry Subtitles to download it again."
+                for component in snapshot.queue[index].resources?.indices ?? 0..<0 {
+                    snapshot.queue[index].resources?[component].state = .failed
+                }
+            }
+            snapshot.receipts.removeAll { $0.metadata.recordID == record.id && $0.metadata.attemptID == record.installedAttemptID }
+            snapshot.transactions.removeAll { $0.id == transaction.id }
         }
     }
 

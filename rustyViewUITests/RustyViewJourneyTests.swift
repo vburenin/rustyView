@@ -1924,6 +1924,64 @@ final class RustyViewJourneyTests: XCTestCase {
         XCTAssertEqual(outgoing.audio, "12")
     }
 
+    func testDownloadMissingEmbeddedSubtitlesRetriesWithoutVideoAndSwitchesLanguagesOffline() throws {
+        let server = try XCTUnwrap(server)
+        server.useOfflineTracksFixture()
+        let app = try launchApp()
+        let title = app.staticTexts["The Clockwork Orchard"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 8))
+        title.tap()
+        downloadOriginal(in: app)
+        waitForDownloadFeedback(in: app)
+        app.navigationBars.buttons.firstMatch.tap()
+        app.buttons["Downloads"].firstMatch.tap()
+        let play = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'play-download-'")).firstMatch
+        XCTAssertTrue(play.waitForExistence(timeout: 35))
+        let videoRequests = server.originalDownloadRequestCount
+        let oldCaptionRequests = server.captionRequestCount
+        server.exposeEmbeddedOfflineSubtitles()
+        server.setCaptionResponse(.denied)
+        let menu = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'download-actions-'")).firstMatch
+        menu.tap()
+        app.buttons["Download Missing Subtitles"].tap()
+        let retry = app.buttons["Retry Subtitles"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 12))
+        XCTAssertTrue(play.exists, "A failed subtitle update must keep the saved video playable")
+        server.setCaptionResponse(.normal)
+        retry.tap()
+        XCTAssertTrue(retry.waitForNonExistence(timeout: 5))
+        let cancel = app.buttons["Cancel Subtitles"]
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 15))
+        XCTAssertEqual(server.originalDownloadRequestCount, videoRequests)
+        XCTAssertEqual(server.captionRequestCount, oldCaptionRequests + 2, "Only the new French track should be requested, once denied and once retried")
+        menu.tap()
+        app.buttons["Download Missing Subtitles"].tap()
+        XCTAssertTrue(app.staticTexts["All available subtitles are already saved."].waitForExistence(timeout: 8))
+        XCTAssertEqual(server.captionRequestCount, oldCaptionRequests + 2)
+        app.terminate()
+        app.launchEnvironment = ["RUSTYVIEW_TEST_NAMESPACE": testNamespace]
+        let baseline = server.requestCount
+        app.launch()
+        XCTAssertTrue(app.buttons["Downloads"].firstMatch.waitForExistence(timeout: 6))
+        XCTAssertTrue(play.waitForExistence(timeout: 6))
+        play.tap()
+        let timeline = app.descendants(matching: .any).matching(identifier: "player-time-label").firstMatch
+        _ = try waitForElapsedSeconds(in: timeline, atLeast: 1, timeout: 12, revealingControlsIn: app)
+        app.buttons["play-pause-control"].tap()
+        for (language, cue) in [("French", "La lune synthetique."), ("English", "Synthetic subtitle.")] {
+            app.buttons["Playback options"].tap()
+            let subtitle = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'local-caption-' AND label CONTAINS %@", language)).firstMatch
+            for _ in 0..<4 {
+                if subtitle.exists && subtitle.isHittable { break }
+                app.swipeUp()
+            }
+            XCTAssertTrue(subtitle.waitForExistence(timeout: 4))
+            subtitle.tap()
+            XCTAssertTrue(app.staticTexts["Subtitles: \(cue)"].waitForExistence(timeout: 4))
+        }
+        XCTAssertEqual(server.requestCount, baseline, "Both subtitle languages and video must remain local after relaunch")
+    }
+
     func testDisconnectedRelaunchOpensOwnedDetailsAndPlaysAlternateAudioCaptionsAndChapterWithoutHTTP() throws {
         let server = try XCTUnwrap(server)
         server.useOfflineTracksFixture()
@@ -3479,6 +3537,11 @@ private final class SyntheticHTTPServer {
     private var captionResponse = CaptionResponse.normal
     private var heldCaptionResponses: [(String, NWConnection)] = []
     private var rejectsPlayback = false
+    private var embeddedOfflineSubtitles = false
+
+    func exposeEmbeddedOfflineSubtitles() {
+        queue.sync { embeddedOfflineSubtitles = true }
+    }
 
     func rejectPlaybackRequests(_ rejected: Bool) {
         queue.sync { rejectsPlayback = rejected }
@@ -4075,7 +4138,7 @@ private final class SyntheticHTTPServer {
             send(browseItem(id), contentType: "application/json", method: method, connection: connection)
             return
         } else if target.hasPrefix("/api/web/item/42001") {
-            let payload: String
+            var payload: String
             if usesNativeCaptions {
                 payload = Self.nativeCaptionItemJSON.replacingOccurrences(of: "8200000000", with: String(nativeCaptionData.count))
             } else if usesManyAudioTracks {
@@ -4101,6 +4164,21 @@ private final class SyntheticHTTPServer {
                 payload = String(decoding: try! JSONSerialization.data(withJSONObject: response), as: UTF8.self)
             } else {
                 payload = usesMultiaudio ? Self.offlineTracksItemJSON.replacingOccurrences(of: "8200000000", with: String(multiaudioData.count)) : Self.itemJSON
+            }
+            if embeddedOfflineSubtitles {
+                var response = try! JSONSerialization.jsonObject(with: Data(payload.utf8)) as! [String: Any]
+                var item = response["item"] as! [String: Any]
+                let enriched = target.contains("enrich=1")
+                item["embedded_captions_complete"] = enriched
+                if enriched {
+                    var captions = item["captions"] as! [[String: Any]]
+                    captions.append(["index": 4_294_967_298, "label": "French", "language": "fra", "default": false,
+                        "forced": true, "embedded": true, "source_format": "subrip", "browser_supported": true,
+                        "url": "/Captions/42001/embedded/2.vtt"])
+                    item["captions"] = captions
+                }
+                response["item"] = item
+                payload = String(decoding: try! JSONSerialization.data(withJSONObject: response), as: UTF8.self)
             }
             send(Data(payload.utf8), contentType: "application/json", method: method, connection: connection)
             return
@@ -4294,11 +4372,14 @@ private final class SyntheticHTTPServer {
             send(preparedSegmentData, contentType: "video/mp2t", method: method, connection: connection)
             return
         } else if target.hasPrefix("/Captions/42001/0.vtt")
-                    || (usesManyAudioTracks && target.hasPrefix("/Captions/42001/")) {
+                    || ((usesManyAudioTracks || embeddedOfflineSubtitles) && target.hasPrefix("/Captions/42001/")) {
             countLock.lock()
             storedCaptionRequestCount += 1
             countLock.unlock()
-            sendCaption(method: method, connection: connection)
+            if target == "/Captions/42001/embedded/2.vtt", captionResponse == .normal {
+                send(Data("WEBVTT\n\n00:00:00.000 --> 02:00:00.000\nLa lune synthetique.\n".utf8),
+                    contentType: "text/vtt", method: method, connection: connection)
+            } else { sendCaption(method: method, connection: connection) }
             return
         } else if let image = largePosterData,
                   target.hasPrefix("/ArtworkBenchmark/\(largePosterNamespace)/"),

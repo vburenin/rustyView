@@ -136,6 +136,9 @@ final class AuthenticatedSessionDelegate: NSObject, URLSessionTaskDelegate {
 }
 
 final class RustyDLNAClient {
+    /// Embedded text extraction can scan the source before sending any bytes.
+    /// Allow the server's bounded preparation deadline plus admission overhead.
+    static let captionPreparationTimeout: TimeInterval = 150
     static let schemaVersion = 2
 
     private let session: URLSession
@@ -194,7 +197,12 @@ final class RustyDLNAClient {
     }
 
     func item(id: String) async throws -> MediaItem {
-        let response: ItemResponse = try await decoded(pathAndQuery: "/api/web/item/\(encodedPathComponent(id))")
+        let owner = try ownedConnection()
+        let response: ItemResponse = try await owner.decoded(pathAndQuery: "/api/web/item/\(encodedPathComponent(id))")
+        if response.item.embeddedCaptionsComplete == false {
+            let enriched: ItemResponse = try await owner.decoded(pathAndQuery: "/api/web/item/\(encodedPathComponent(id))?enrich=1")
+            return enriched.item
+        }
         return response.item
     }
 

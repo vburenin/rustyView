@@ -158,9 +158,18 @@ Completed compatible copies show the dimensions inspected from the actual saved 
 
 With a supporting rustyDLNA server, compatible downloads preserve supported
 audio and can include all audio tracks; unsupported audio becomes AAC with up
-to eight channels. Separate subtitle files are included when available;
-embedded subtitles are omitted from compatible copies. Video budgets exclude
-preserved audio, so the final file size can be larger.
+to eight channels. All supported text subtitles are saved automatically,
+including embedded tracks exposed by an updated rustyDLNA server. Language,
+track title, and forced/default flags are retained. Image-based subtitles such
+as PGS/VobSub remain unsupported and are disclosed before download. Video
+budgets exclude preserved audio, so the final file size can be larger.
+
+For a movie already saved, choose **Download Missing Subtitles** from its (…) menu
+in Downloads, movie details, or Manage Copies. This checks the owning server/account
+and downloads missing tracks without downloading the video again. The existing
+copy stays playable during updates; subtitle transfers support pause, cancellation,
+retry and process relaunch. Switch languages in the offline player's Subtitles list.
+App-rendered subtitles retain their Picture in Picture and AirPlay limitation.
 
 **Preserve HDR** is on by default. Compatible encoding requests source-specific
 HEVC HDR10 when the server advertises it. If HDR cannot survive the chosen

@@ -117,6 +117,15 @@ cohesive product rather than independent demos.
   legible groups provide native selection; server indices never stand in for
   native options. The player discloses that app-rendered text is absent from
   Picture in Picture and AirPlay video before allowing that output transition.
+- Downloads include every advertised supported text subtitle, including embedded
+  tracks extracted by supporting servers. Item metadata with incomplete embedded
+  discovery is enriched through the same captured connection. Default/forced flags
+  and stable server indexes survive local packaging. Download Missing Subtitles
+  uses a caption-only background queue attempt for an existing copy; it never
+  transfers or moves the video. A recoverable subtitle transaction adds owned
+  files before atomically publishing the new record, preserves playback while
+  updating, and rolls back unpublished additions on cancellation. Older servers
+  and unsupported image subtitles retain visible limitations.
 - `PlaybackSystemController` owns audio-session notifications, removable remote
   command targets, and Now Playing. Interruption state survives pending durable
   Start Over and Resume restoration. Resume permission belongs to one logical

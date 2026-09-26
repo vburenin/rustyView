@@ -5,6 +5,41 @@ import XCTest
 
 @MainActor
 final class RequestOwnershipTests: XCTestCase {
+    func testSubtitleEnrichmentRetainsOriginalAccountAcrossBothItemRequests() async throws {
+        let server = try OwnershipHTTPServer()
+        let address = try await server.start()
+        defer { server.stop() }
+        let original = try ServerConnection(serverAddress: address, username: "subtitle-owner", password: "synthetic-one")
+        let replacement = try ServerConnection(serverAddress: address, username: "other-viewer", password: "synthetic-two")
+        var response = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(ServerModelDecodingTests.itemJSONForHTTP.utf8)) as? [String: Any])
+        var item = try XCTUnwrap(response["item"] as? [String: Any])
+        item["embedded_captions_complete"] = false
+        response["item"] = item
+        let incomplete = try JSONSerialization.data(withJSONObject: response)
+        item["embedded_captions_complete"] = true
+        item["captions"] = [["index": 4_294_967_298, "label": "French", "language": "fra", "default": false,
+            "source_format": "subrip", "browser_supported": true, "url": "/Captions/42001/embedded/2.vtt", "forced": true, "embedded": true]]
+        response["item"] = item
+        let enriched = try JSONSerialization.data(withJSONObject: response)
+        let arrived = expectation(description: "First metadata response held")
+        let release = OwnershipResponseGate()
+        server.handler = { request, respond in
+            if request.target.contains("enrich=1") { respond(.init(status: 200, body: enriched)) }
+            else { release.store(respond); arrived.fulfill() }
+        }
+        let client = RustyDLNAClient(configuration: .ephemeral)
+        client.configure(original)
+        let pending = Task { try await client.item(id: "42001") }
+        await fulfillment(of: [arrived], timeout: 3)
+        client.configure(replacement)
+        release.respond(.init(status: 200, body: incomplete))
+        let loaded = try await pending.value
+        XCTAssertEqual(loaded.captions.first?.index, 4_294_967_298)
+        XCTAssertEqual(loaded.captions.first?.forced, true)
+        XCTAssertEqual(server.requests.count, 2)
+        XCTAssertTrue(server.requests.allSatisfy { $0.authorization == original.authorizationHeader() })
+    }
+
     /// The previous mutable session delegate answered a delayed 401 with the
     /// newly configured account. This exercises that challenge over real HTTP.
     func testDelayedAuthenticationKeepsTheAccountThatStartedTheRequest() async throws {

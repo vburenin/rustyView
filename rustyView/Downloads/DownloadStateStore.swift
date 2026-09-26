@@ -12,13 +12,14 @@ struct DownloadReceipt: Codable, Equatable, Sendable, Identifiable {
 }
 
 struct DownloadFileTransaction: Codable, Equatable, Sendable, Identifiable {
-    enum Operation: String, Codable, Sendable { case install, delete }
+    enum Operation: String, Codable, Sendable { case install, delete, subtitles }
     let id: UUID
     let operation: Operation
     let record: DownloadRecord
     let sourceName: String
     let destinationName: String
     var mediaReceiptDirectory: String? = nil
+    var previousRecord: DownloadRecord? = nil
 }
 
 struct DownloadStorageSnapshot: Codable, Equatable, Sendable {

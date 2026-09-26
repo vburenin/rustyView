@@ -163,6 +163,7 @@ struct TranscodeStatus: Codable, Sendable {
 }
 
 struct MediaItem: Codable, Identifiable, Hashable, Sendable {
+    var embeddedCaptionsComplete: Bool? = nil
     let id: String
     let title: String
     let fileName: String
@@ -200,6 +201,7 @@ struct MediaItem: Codable, Identifiable, Hashable, Sendable {
     var preparedVideoOutputs: [String]? = nil
 
     enum CodingKeys: String, CodingKey {
+        case embeddedCaptionsComplete = "embedded_captions_complete"
         case id, title
         case fileName = "file_name"
         case kind, mime, ext, duration
@@ -267,6 +269,8 @@ struct CaptionTrack: Codable, Identifiable, Hashable, Sendable {
     let sourceFormat: String
     let browserSupported: Bool
     let url: String?
+    var forced: Bool? = nil
+    var embedded: Bool? = nil
 
     var id: Int { index }
     var isPlayableOnDevice: Bool { browserSupported && url != nil }
@@ -275,7 +279,7 @@ struct CaptionTrack: Codable, Identifiable, Hashable, Sendable {
         case index, label, language, `default`
         case sourceFormat = "source_format"
         case browserSupported = "browser_supported"
-        case url
+        case url, forced, embedded
     }
 }
 

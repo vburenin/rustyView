@@ -75,7 +75,7 @@ final class DownloadManifestStore: @unchecked Sendable {
                     record.assetInspection = nil
                 }
                 if record.localCaptions?.contains(where: { captionURL(for: record, caption: $0) == nil }) == true {
-                    record.packageIssue = "A saved subtitle file is missing. Download a new compatible copy to restore its subtitles."
+                    record.packageIssue = "A saved subtitle file is missing. Choose Download Missing Subtitles to restore it."
                 }
                 if record.artworkPath != nil, artworkURL(for: record) == nil {
                     record.artworkPath = nil

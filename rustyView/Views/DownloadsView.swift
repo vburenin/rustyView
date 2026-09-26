@@ -195,6 +195,7 @@ struct DownloadsView: View {
                 }
             } secondary: {
                 Menu {
+                    DownloadSubtitlesAction(record: record)
                     if record.isReadyToWatch, app.player.resumePosition(for: record) != nil {
                         Button("Start Over", systemImage: "arrow.counterclockwise") { app.playOffline(record, start: .startOver) }
                     }
@@ -219,6 +220,7 @@ struct DownloadsView: View {
                 .accessibilityLabel("Actions for \(record.displayTitle)")
                 .accessibilityValue(record.kind.label)
             }
+            OfflineSubtitleDownloadStatus(record: record)
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .contain)
@@ -539,6 +541,7 @@ struct DownloadCopiesView: View {
                                         }
                                         .disabled(app.downloads.revalidatingAssets.contains(record.id))
                                     }
+                                    DownloadSubtitlesAction(record: record)
                                     Button("Delete Download", systemImage: "trash", role: .destructive) { pendingDeletion = record }
                                         .accessibilityIdentifier("delete-download-\(record.id.uuidString)")
                                         .accessibilityLabel("Delete \(record.kind == .original ? "original" : "compatible") copy of \(record.displayTitle)")
@@ -549,6 +552,7 @@ struct DownloadCopiesView: View {
                                 .accessibilityIdentifier("copy-actions-\(record.id.uuidString)")
                                 .accessibilityLabel("Actions for \(record.kind == .original ? "original" : "compatible") copy of \(record.displayTitle)")
                             }
+                            OfflineSubtitleDownloadStatus(record: record)
                         }
                         .padding(.vertical, 4)
                         .accessibilityElement(children: .contain)
