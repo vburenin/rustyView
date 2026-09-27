@@ -212,6 +212,8 @@ final class PlaybackModel: ObservableObject {
     private var userIntentRevision: UInt64 = 0
     private var lastNowPlayingSecond: Int?
     private var captionLoadTask: Task<[SubtitleCue], Error>?
+    private var captionWindowTask: Task<Void, Never>?
+    private var streamingSubtitle: StreamingSubtitleSession?
     private var activityViewingID = UUID()
     private var activityStarted = false
     private var lastObservedPlaybackTime: Double?
@@ -816,8 +818,14 @@ final class PlaybackModel: ObservableObject {
             let task: Task<[SubtitleCue], Error>
             switch option.source {
             case .server(let index):
-                guard let path = item?.captions.first(where: { $0.index == index })?.url else { throw SubtitleError.invalidFormat }
+                guard let track = item?.captions.first(where: { $0.index == index }), let path = track.url else { throw SubtitleError.invalidFormat }
                 let owner = try (viewingSession?.client ?? client).ownedConnection()
+                if let path = track.streamingURL {
+                    let session = StreamingSubtitleSession(path: path, client: owner, selection: option.selection, index: index)
+                    streamingSubtitle = session
+                    await loadSubtitleWindow(session, start: StreamingSubtitleSession.start(at: globalTime))
+                    return
+                }
                 task = Task {
                     var request = try owner.authorizedRequest(serverPath: path)
                     request.timeoutInterval = RustyDLNAClient.captionPreparationTimeout
@@ -864,6 +872,8 @@ final class PlaybackModel: ObservableObject {
 
     private func clearSubtitleSelection() {
         captionLoadTask?.cancel(); captionLoadTask = nil
+        captionWindowTask?.cancel(); captionWindowTask = nil
+        streamingSubtitle = nil
         captionRequest = UUID()
         selectedCaptionIndex = nil
         selectedLocalSubtitleID = nil
@@ -1466,8 +1476,84 @@ final class PlaybackModel: ObservableObject {
     }
 
     private func updateSubtitle(at time: Double) {
+        updateSubtitleWindow(at: time)
         let text = subtitleCues.filter { $0.contains(time) }.map(\.text).joined(separator: "\n")
         currentSubtitle = text.isEmpty ? nil : text
+    }
+
+    private func updateSubtitleWindow(at time: Double) {
+        guard let session = streamingSubtitle else { return }
+        if case .failed = subtitleSelection { return }
+        let current = StreamingSubtitleSession.start(at: time)
+        let available = session.contains(current)
+        if !available {
+            subtitleCues = []
+            selectedCaptionIndex = nil
+            subtitleSelection = .loading(session.selection)
+        } else {
+            // Returning to a cached window must also defeat a pending seek load.
+            subtitleCues = session.cues
+            selectedCaptionIndex = session.index
+            subtitleSelection = .active(session.selection)
+        }
+        let next = current + StreamingSubtitleSession.windowSeconds
+        let shouldPrefetch = available && time >= Double(next - 30)
+            && (duration <= 0 || Double(next) < duration)
+        let wanted = available ? (shouldPrefetch ? next : nil) : current
+        guard let wanted, !session.contains(wanted) else {
+            if session.pendingStart != nil {
+                captionLoadTask?.cancel(); captionWindowTask?.cancel()
+                session.loadID = UUID(); session.pendingStart = nil
+            }
+            return
+        }
+        guard session.pendingStart != wanted else { return }
+        captionWindowTask?.cancel()
+        captionLoadTask?.cancel()
+        // Claim the seek before the task gets a turn. Another scrub can return
+        // to cached cues in this same actor turn and must cancel this work too.
+        session.loadID = UUID()
+        session.pendingStart = wanted
+        captionWindowTask = Task { [weak self] in
+            await self?.loadSubtitleWindow(session, start: wanted)
+        }
+    }
+
+    private func loadSubtitleWindow(_ session: StreamingSubtitleSession, start: Int) async {
+        guard streamingSubtitle === session, !Task.isCancelled else { return }
+        captionLoadTask?.cancel()
+        let requestID = UUID()
+        session.loadID = requestID
+        session.pendingStart = start
+        do {
+            let request = try session.request(start: start)
+            let owner = session.client
+            let task = Task {
+                let data = try await owner.data(for: request)
+                try Task.checkCancellation()
+                return try await Task.detached(priority: .userInitiated) {
+                    try WebVTTParser.parse(data, allowEmpty: true)
+                }.value
+            }
+            captionLoadTask = task
+            let cues = try await task.value
+            guard streamingSubtitle === session, session.loadID == requestID, !Task.isCancelled else { return }
+            captionLoadTask = nil
+            session.pendingStart = nil
+            session.insert(cues, start: start)
+            updateSubtitle(at: globalTime)
+            if isExternalPlaybackActive {
+                pausePlayback()
+                systemPlaybackNotice = "Return playback here or turn subtitles off to continue on AirPlay."
+            }
+        } catch {
+            guard streamingSubtitle === session, session.loadID == requestID, !Task.isCancelled else { return }
+            captionLoadTask = nil
+            session.pendingStart = nil
+            let message = (error is SubtitleError) ? error.localizedDescription : UserFacingError(error).message
+            subtitleCues = []
+            failSubtitle(session.selection, message: message)
+        }
     }
 
     private func updateChapter(at time: Double) {
@@ -1694,6 +1780,7 @@ final class PlaybackModel: ObservableObject {
     deinit {
         preparingAssetTask?.cancel()
         captionLoadTask?.cancel()
+        captionWindowTask?.cancel()
         durableStartTask?.cancel()
         startupWatchdog?.cancel()
         pendingSeek?.cancel()

@@ -1,6 +1,6 @@
 import Foundation
 
-struct SubtitleCue: Equatable, Sendable {
+struct SubtitleCue: Hashable, Sendable {
     let start: Double
     let end: Double
     let text: String
@@ -8,7 +8,7 @@ struct SubtitleCue: Equatable, Sendable {
 }
 
 enum WebVTTParser {
-    static func parse(_ data: Data) throws -> [SubtitleCue] {
+    static func parse(_ data: Data, allowEmpty: Bool = false) throws -> [SubtitleCue] {
         guard var text = String(data: data, encoding: .utf8) else { throw SubtitleError.invalidEncoding }
         if text.hasPrefix("\u{feff}") { text.removeFirst() }
         text = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
@@ -33,7 +33,13 @@ enum WebVTTParser {
             let cueText = decodeReferences(unstyled).trimmingCharacters(in: .whitespacesAndNewlines)
             if !cueText.isEmpty { cues.append((order, SubtitleCue(start: start, end: end, text: cueText))) }
         }
-        guard !cues.isEmpty else { throw SubtitleError.invalidFormat }
+        // A window with no dialogue is a successful load. Only a header/NOTE
+        // document qualifies; malformed timing still cannot become active.
+        let emptyDocument = blocks.dropFirst().allSatisfy {
+            let block = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            return block.isEmpty || block == "NOTE" || block.hasPrefix("NOTE ") || block.hasPrefix("NOTE\n")
+        }
+        guard !cues.isEmpty || (allowEmpty && emptyDocument) else { throw SubtitleError.invalidFormat }
         return cues.sorted { $0.cue.start == $1.cue.start ? $0.order < $1.order : $0.cue.start < $1.cue.start }.map(\.cue)
     }
 
@@ -71,6 +77,53 @@ enum WebVTTParser {
             else { output.append("&"); cursor = start }
         }
         return output
+    }
+}
+
+/// One online selection owns its connection and a bounded set of movie-time
+/// windows. Complete offline captions continue to use the ordinary URL.
+@MainActor
+final class StreamingSubtitleSession {
+    static let windowSeconds = 120
+    let path: String
+    let client: RustyDLNAClient
+    let selection: SubtitleSelection
+    let index: Int
+    var pendingStart: Int?
+    var loadID = UUID()
+    private var windows: [(start: Int, cues: [SubtitleCue])] = []
+    private(set) var cues: [SubtitleCue] = []
+
+    init(path: String, client: RustyDLNAClient, selection: SubtitleSelection, index: Int) {
+        self.path = path; self.client = client; self.selection = selection; self.index = index
+    }
+
+    static func start(at time: Double) -> Int {
+        guard time.isFinite else { return 0 }
+        return Int(min(max(0, time), 2_592_000)) / windowSeconds * windowSeconds
+    }
+
+    func contains(_ start: Int) -> Bool { windows.contains { $0.start == start } }
+
+    func insert(_ cues: [SubtitleCue], start: Int) {
+        windows.removeAll { $0.start == start }
+        windows.append((start, cues))
+        if windows.count > 3 { windows.removeFirst(windows.count - 3) }
+        var seen = Set<SubtitleCue>()
+        self.cues = windows.sorted { $0.start < $1.start }.flatMap(\.cues)
+            .filter { seen.insert($0).inserted }.sorted { $0.start < $1.start }
+    }
+
+    func request(start: Int) throws -> URLRequest {
+        guard var components = URLComponents(string: path) else { throw SubtitleError.invalidFormat }
+        var query = components.queryItems ?? []
+        query.removeAll { $0.name == "start" }
+        query.append(URLQueryItem(name: "start", value: String(start)))
+        components.queryItems = query
+        guard let path = components.string else { throw SubtitleError.invalidFormat }
+        var request = try client.authorizedRequest(serverPath: path)
+        request.timeoutInterval = RustyDLNAClient.captionPreparationTimeout
+        return request
     }
 }
 

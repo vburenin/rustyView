@@ -129,6 +129,12 @@ separately saved or server-provided text. Separate text is drawn inside
 rustyView; it does not appear in Picture in Picture or AirPlay video. The player
 explains that limitation before you start those output modes.
 
+When the server advertises subtitle streaming, embedded text loads in two-minute
+windows around the playback position. The next window loads ahead of playback,
+and recent windows remain available for quick backward seeks. Older servers and
+sidecar captions use complete files; offline downloads always save complete
+subtitle tracks.
+
 Playback pauses for audio interruptions and when an audio device disconnects.
 After an interruption, it resumes only when iOS permits it and you have not
 changed the playback intent. A movie opened during the interruption stays

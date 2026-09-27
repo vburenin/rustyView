@@ -7,10 +7,140 @@ import XCTest
 /// holds real caption responses; a held selection is never a prearranged value.
 @MainActor
 final class CaptionPlaybackTests: XCTestCase {
+    private var testDefaults: UserDefaults!
+    private var testDefaultsName: String!
+
+    override func setUp() {
+        super.setUp()
+        testDefaultsName = "CaptionPlaybackTests.\(UUID().uuidString)"
+        testDefaults = UserDefaults(suiteName: testDefaultsName)!
+    }
+
+    override func tearDown() {
+        testDefaults.removePersistentDomain(forName: testDefaultsName)
+        testDefaults = nil
+        super.tearDown()
+    }
+
+    private func playbackModel(client: RustyDLNAClient) -> PlaybackModel {
+        PlaybackModel(client: client, preferences: PlaybackPreferences(defaults: testDefaults))
+    }
+
+    func testStreamingWindowsRenderEarlyPrefetchAcrossBoundaryAndSeekWithGlobalTimes() async throws {
+        let fixture = try await CaptionHTTPFixture.make(streaming: true, long: true)
+        defer { fixture.stop() }
+        let model = playbackModel(client: fixture.client)
+        defer { model.stop() }
+        let first = Data("WEBVTT\n\n00:00.000 --> 00:10.000\nFirst window\n\n01:58.000 --> 02:04.000\nCrossing cue\n".utf8)
+        let second = Data("WEBVTT\n\n01:58.000 --> 02:04.000\nCrossing cue\n\n02:05.000 --> 02:10.000\nSecond window\n".utf8)
+        fixture.server.setCaptionResponse(status: 200, body: first)
+        model.play(fixture.item, mode: .original, preservingIntent: .paused)
+        await waitFor("Long decoded movie is ready") { model.player.currentItem?.status == .readyToPlay }
+        await model.selectCaption(0)
+        XCTAssertEqual(model.currentSubtitle, "First window")
+        XCTAssertEqual(fixture.server.captionTargets.count, 1)
+        XCTAssertTrue(fixture.server.captionTargets[0].hasSuffix("?start=0"), "Streaming must not wait for the full offline resource")
+
+        fixture.server.holdCaptions()
+        model.seek(toGlobalTime: 119)
+        await waitFor("Next window is prefetched while the crossing cue remains visible") {
+            fixture.server.heldCaptionCount == 1 && model.currentSubtitle == "Crossing cue"
+                && abs(model.player.currentTime().seconds - 119) < 0.1
+        }
+        guard case .active = model.subtitleSelection else { return XCTFail("Prefetch must not hide usable captions") }
+        XCTAssertTrue(fixture.server.captionTargets.last?.hasSuffix("?start=120") == true)
+        fixture.server.releaseCaptions(status: 200, body: second)
+        model.seek(toGlobalTime: 126)
+        await waitFor("Second window uses original movie timestamps") {
+            model.currentSubtitle == "Second window" && abs(model.player.currentTime().seconds - 126) < 0.1
+        }
+
+        fixture.server.setCaptionResponse(status: 200, body: Data("WEBVTT\n\n05:01.000 --> 05:06.000\nAfter the seek\n".utf8))
+        model.seek(toGlobalTime: 302)
+        await waitFor("A distant seek fetches its own window") {
+            model.currentSubtitle == "After the seek" && abs(model.player.currentTime().seconds - 302) < 0.1
+        }
+        XCTAssertTrue(fixture.server.captionTargets.last?.hasSuffix("?start=240") == true)
+        let requests = fixture.server.captionRequestCount
+        model.seek(toGlobalTime: 3)
+        await waitFor("Returning to a cached window needs no request") {
+            model.currentSubtitle == "First window" && abs(model.player.currentTime().seconds - 3) < 0.1
+        }
+        XCTAssertEqual(fixture.server.captionRequestCount, requests)
+    }
+
+    func testEmptyStreamingWindowIsActiveAndOffDefeatsHeldSeekResponse() async throws {
+        let fixture = try await CaptionHTTPFixture.make(streaming: true, long: true)
+        defer { fixture.stop() }
+        let model = playbackModel(client: fixture.client)
+        defer { model.stop() }
+        fixture.server.setCaptionResponse(status: 200, body: Data("WEBVTT\n\n".utf8))
+        model.play(fixture.item, mode: .original, preservingIntent: .paused)
+        await waitFor("Long movie is ready") { model.player.currentItem?.status == .readyToPlay }
+        await model.selectCaption(0)
+        guard case .active = model.subtitleSelection else { return XCTFail("A gap in dialogue is a loaded window") }
+        XCTAssertNil(model.currentSubtitle)
+        fixture.server.holdCaptions()
+        model.seek(toGlobalTime: 245)
+        await waitFor("Seek window is held") { fixture.server.heldCaptionCount == 1 }
+        model.turnSubtitlesOff()
+        fixture.server.releaseCaptions(status: 200, body: Data("WEBVTT\n\n04:00.000 --> 04:10.000\nLate cue\n".utf8))
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(model.subtitleSelection, .off)
+        XCTAssertNil(model.currentSubtitle)
+        XCTAssertNil(model.selectedCaptionIndex)
+    }
+
+    func testStreamingWindowCacheBoundsAndEmptyParsingDoNotAcceptMalformedVTT() throws {
+        XCTAssertEqual(try WebVTTParser.parse(Data("WEBVTT\n\n".utf8), allowEmpty: true), [])
+        XCTAssertThrowsError(try WebVTTParser.parse(Data("WEBVTT\n\n".utf8)))
+        XCTAssertThrowsError(try WebVTTParser.parse(Data("WEBVTT\n\ninvalid --> time\nCue".utf8), allowEmpty: true))
+        let session = StreamingSubtitleSession(path: "/captions/window.vtt?start=0", client: RustyDLNAClient(),
+            selection: SubtitleSelection(id: "server-0", label: "English", delivery: .appOverlay), index: 0)
+        let crossing = SubtitleCue(start: 118, end: 124, text: "Crossing")
+        session.insert([crossing], start: 0)
+        session.insert([crossing], start: 120)
+        XCTAssertEqual(session.cues, [crossing], "Overlapping windows must not repeat a cue")
+        session.insert([], start: 240)
+        session.insert([], start: 360)
+        XCTAssertFalse(session.contains(0))
+        XCTAssertTrue(session.contains(120))
+        let client = RustyDLNAClient(configuration: .ephemeral)
+        client.configure(try ServerConnection(serverAddress: "https://captions.example.test", username: "viewer", password: "synthetic"))
+        let foreign = StreamingSubtitleSession(path: "https://foreign.example.test/track.vtt?start=0", client: client,
+            selection: session.selection, index: 0)
+        XCTAssertThrowsError(try foreign.request(start: 120), "Advertised streaming URLs must obey the same origin boundary")
+    }
+
+    func testReturningToCachedWindowDefeatsLateSeekFailure() async throws {
+        let fixture = try await CaptionHTTPFixture.make(streaming: true, long: true)
+        defer { fixture.stop() }
+        let model = playbackModel(client: fixture.client)
+        defer { model.stop() }
+        fixture.server.setCaptionResponse(status: 200, body: Self.captions)
+        model.play(fixture.item, mode: .original, preservingIntent: .paused)
+        await waitFor("Long movie is ready") { model.player.currentItem?.status == .readyToPlay }
+        await model.selectCaption(0)
+        let beforeScrub = fixture.server.captionRequestCount
+        model.seek(toGlobalTime: 245)
+        model.seek(toGlobalTime: 1.5)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(fixture.server.captionRequestCount, beforeScrub, "A same-turn scrub back must cancel work before its task starts")
+        fixture.server.holdCaptions()
+        model.seek(toGlobalTime: 245)
+        await waitFor("Distant seek is held") { fixture.server.heldCaptionCount == 1 }
+        model.seek(toGlobalTime: 1.5)
+        await waitFor("Cached captions restore immediately") { model.currentSubtitle == "Copper & paper <lantern>\nA second voice" }
+        fixture.server.releaseCaptions(status: 401, body: Data())
+        try await Task.sleep(for: .milliseconds(150))
+        guard case .active = model.subtitleSelection else { return XCTFail("A stale seek failure cannot replace the cached selection") }
+        XCTAssertNil(model.subtitleError)
+    }
+
     func testHeldCaptionIsRequestedButNotActiveAndOffDefeatsItsLateResponse() async throws {
         let fixture = try await CaptionHTTPFixture.make()
         defer { fixture.stop() }
-        let model = PlaybackModel(client: fixture.client)
+        let model = playbackModel(client: fixture.client)
         defer { model.stop() }
         model.play(fixture.item, mode: .original)
         await waitFor("Video is actually playing before choosing subtitles") { model.player.currentTime().seconds >= 0.4 }
@@ -31,9 +161,9 @@ final class CaptionPlaybackTests: XCTestCase {
     }
 
     func testAuthenticationFailureKeepsRequestedTrackForRetryAndMalformedRetryIsNotActive() async throws {
-        let fixture = try await CaptionHTTPFixture.make()
+        let fixture = try await CaptionHTTPFixture.make(streaming: true)
         defer { fixture.stop() }
-        let model = PlaybackModel(client: fixture.client)
+        let model = playbackModel(client: fixture.client)
         defer { model.stop() }
         model.play(fixture.item, mode: .original)
         await waitFor("Real original is ready") { model.player.currentItem?.status == .readyToPlay }
@@ -73,9 +203,9 @@ final class CaptionPlaybackTests: XCTestCase {
     }
 
     func testOldHeldCaptionCannotChangeANewerMovieEvenAtTheSameIndex() async throws {
-        let fixture = try await CaptionHTTPFixture.make()
+        let fixture = try await CaptionHTTPFixture.make(streaming: true)
         defer { fixture.stop() }
-        let model = PlaybackModel(client: fixture.client)
+        let model = playbackModel(client: fixture.client)
         defer { model.stop() }
         model.play(fixture.item, mode: .original)
         fixture.server.holdCaptions()
@@ -156,22 +286,45 @@ struct CaptionHTTPFixture {
     let client: RustyDLNAClient
     let item: MediaItem
 
-    @MainActor static func make() async throws -> Self {
+    @MainActor static func make(streaming: Bool = false, long: Bool = false) async throws -> Self {
         let mediaURL = try XCTUnwrap(Bundle(for: CaptionPlaybackTests.self).url(forResource: "synthetic-native-tracks", withExtension: "mp4"))
-        let server = try CaptionTestHTTPServer(media: Data(contentsOf: mediaURL))
+        let media: Data
+        if long {
+            // Repeat real decoded video samples to exercise movie-time seeks
+            // beyond several windows without another checked-in fixture.
+            let asset = AVURLAsset(url: mediaURL)
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            let source = try XCTUnwrap(tracks.first)
+            let length = try await asset.load(.duration)
+            let composition = AVMutableComposition()
+            let video = try XCTUnwrap(composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid))
+            for _ in 0..<70 {
+                try video.insertTimeRange(CMTimeRange(start: .zero, duration: length), of: source, at: composition.duration)
+            }
+            let output = FileManager.default.temporaryDirectory.appendingPathComponent("caption-timeline-\(UUID().uuidString).mp4")
+            defer { try? FileManager.default.removeItem(at: output) }
+            let exporter = try XCTUnwrap(AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough))
+            exporter.outputURL = output; exporter.outputFileType = .mp4
+            await exporter.export()
+            if let error = exporter.error { throw error }
+            media = try Data(contentsOf: output)
+        } else { media = try Data(contentsOf: mediaURL) }
+        let server = try CaptionTestHTTPServer(media: media)
         let address = try await server.start()
         let client = RustyDLNAClient(configuration: .ephemeral)
         client.configure(try ServerConnection(serverAddress: address, username: "viewer", password: "synthetic-caption-secret"))
-        return try Self(server: server, client: client, item: decodeItem(id: "76001"))
+        return try Self(server: server, client: client, item: decodeItem(id: "76001", streaming: streaming, long: long))
     }
     func itemWithID(_ id: String) throws -> MediaItem { try Self.decodeItem(id: id) }
     func stop() { server.stop() }
-    private static func decodeItem(id: String) throws -> MediaItem {
+    private static func decodeItem(id: String, streaming: Bool = false, long: Bool = false) throws -> MediaItem {
         var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(ServerModelDecodingTests.itemJSONForHTTP.utf8)) as? [String: Any])
         var item = try XCTUnwrap(envelope["item"] as? [String: Any])
         item["id"] = id; item["title"] = "The Copper Lantern \(id)"
-        item["source_url"] = "/media/\(id).mp4"; item["duration_seconds"] = 6
-        item["captions"] = [["index": 0, "label": "English", "language": "eng", "default": false, "source_format": "vtt", "browser_supported": true, "url": "/captions/\(id).vtt"]]
+        item["source_url"] = "/media/\(id).mp4"; item["duration_seconds"] = long ? 420 : 6
+        var caption: [String: Any] = ["index": 0, "label": "English", "language": "eng", "default": false, "source_format": "vtt", "browser_supported": true, "url": "/captions/\(id).vtt"]
+        if streaming { caption["streaming_url"] = "/captions/\(id).vtt?start=0" }
+        item["captions"] = [caption]
         envelope["item"] = item
         return try JSONDecoder().decode(ItemResponse.self, from: JSONSerialization.data(withJSONObject: envelope)).item
     }
@@ -189,10 +342,12 @@ final class CaptionTestHTTPServer: @unchecked Sendable {
     private var holdingMedia = false
     private var held: [NWConnection] = []
     private var captionRequests = 0
+    private var requestedCaptionTargets: [String] = []
     private var preparedMediaRequests: [String] = []
     private var startup: CheckedContinuation<String, Error>?
     var heldCaptionCount: Int { lock.lock(); defer { lock.unlock() }; return held.count }
     var captionRequestCount: Int { lock.lock(); defer { lock.unlock() }; return captionRequests }
+    var captionTargets: [String] { lock.lock(); defer { lock.unlock() }; return requestedCaptionTargets }
     var preparedRequests: [String] { lock.lock(); defer { lock.unlock() }; return preparedMediaRequests }
     init(media: Data) throws { self.media = media; listener = try NWListener(using: .tcp, on: .any) }
     func holdCaptions() { lock.lock(); holding = true; lock.unlock() }
@@ -238,7 +393,7 @@ final class CaptionTestHTTPServer: @unchecked Sendable {
             guard first.count >= 2 else { connection.cancel(); return }
             let target = String(first[1]), head = first[0] == "HEAD"
             let auth = lines.first { $0.lowercased().hasPrefix("authorization:") }?.split(separator: ":", maxSplits: 1).last?.trimmingCharacters(in: .whitespaces)
-            if target.hasPrefix("/captions/") { lock.lock(); captionRequests += 1; lock.unlock() }
+            if target.hasPrefix("/captions/") { lock.lock(); captionRequests += 1; requestedCaptionTargets.append(target); lock.unlock() }
             guard auth == "Basic " + Data("viewer:synthetic-caption-secret".utf8).base64EncodedString() else {
                 send(connection, status: 401, body: Data(), contentType: "text/plain"); return
             }

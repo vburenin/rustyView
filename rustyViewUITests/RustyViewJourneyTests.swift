@@ -886,7 +886,10 @@ final class RustyViewJourneyTests: XCTestCase {
     }
     @MainActor
     func testPrimarySubtitleMenuShowsLoadingFailureRetryAndOverlappingDialogue() throws {
+        server?.useStreamingSubtitles()
         try exerciseSubtitleFeedbackFonts(.large, name: "Default", includePlayerFailure: true)
+        XCTAssertGreaterThan(server?.streamingCaptionRequestCount ?? 0, 0)
+        XCTAssertEqual(server?.streamingCaptionRequestCount, server?.captionRequestCount)
     }
 
     @MainActor
@@ -3538,6 +3541,13 @@ private final class SyntheticHTTPServer {
     private var heldCaptionResponses: [(String, NWConnection)] = []
     private var rejectsPlayback = false
     private var embeddedOfflineSubtitles = false
+    private var streamingSubtitles = false
+    private var storedStreamingCaptionRequestCount = 0
+    var streamingCaptionRequestCount: Int {
+        countLock.lock(); defer { countLock.unlock() }; return storedStreamingCaptionRequestCount
+    }
+
+    func useStreamingSubtitles() { queue.sync { streamingSubtitles = true } }
 
     func exposeEmbeddedOfflineSubtitles() {
         queue.sync { embeddedOfflineSubtitles = true }
@@ -4174,10 +4184,21 @@ private final class SyntheticHTTPServer {
                     var captions = item["captions"] as! [[String: Any]]
                     captions.append(["index": 4_294_967_298, "label": "French", "language": "fra", "default": false,
                         "forced": true, "embedded": true, "source_format": "subrip", "browser_supported": true,
-                        "url": "/Captions/42001/embedded/2.vtt"])
+                        "url": "/Captions/42001/embedded/2.vtt",
+                        "streaming_url": "/Captions/42001/embedded/2.vtt?start=0"])
                     item["captions"] = captions
                 }
                 response["item"] = item
+                payload = String(decoding: try! JSONSerialization.data(withJSONObject: response), as: UTF8.self)
+            }
+            if streamingSubtitles {
+                var response = try! JSONSerialization.jsonObject(with: Data(payload.utf8)) as! [String: Any]
+                var item = response["item"] as! [String: Any]
+                var captions = item["captions"] as! [[String: Any]]
+                for index in captions.indices {
+                    if let path = captions[index]["url"] as? String { captions[index]["streaming_url"] = path + "?start=0" }
+                }
+                item["captions"] = captions; response["item"] = item
                 payload = String(decoding: try! JSONSerialization.data(withJSONObject: response), as: UTF8.self)
             }
             send(Data(payload.utf8), contentType: "application/json", method: method, connection: connection)
@@ -4375,6 +4396,7 @@ private final class SyntheticHTTPServer {
                     || ((usesManyAudioTracks || embeddedOfflineSubtitles) && target.hasPrefix("/Captions/42001/")) {
             countLock.lock()
             storedCaptionRequestCount += 1
+            if Self.queryValue(named: "start", in: target) != nil { storedStreamingCaptionRequestCount += 1 }
             countLock.unlock()
             if target == "/Captions/42001/embedded/2.vtt", captionResponse == .normal {
                 send(Data("WEBVTT\n\n00:00:00.000 --> 02:00:00.000\nLa lune synthetique.\n".utf8),

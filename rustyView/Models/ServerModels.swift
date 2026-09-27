@@ -271,6 +271,7 @@ struct CaptionTrack: Codable, Identifiable, Hashable, Sendable {
     let url: String?
     var forced: Bool? = nil
     var embedded: Bool? = nil
+    var streamingURL: String? = nil
 
     var id: Int { index }
     var isPlayableOnDevice: Bool { browserSupported && url != nil }
@@ -280,6 +281,7 @@ struct CaptionTrack: Codable, Identifiable, Hashable, Sendable {
         case sourceFormat = "source_format"
         case browserSupported = "browser_supported"
         case url, forced, embedded
+        case streamingURL = "streaming_url"
     }
 }
 
