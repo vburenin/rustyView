@@ -2290,7 +2290,18 @@ final class RustyViewJourneyTests: XCTestCase {
         app.buttons["Watch"].tap()
         XCTAssertTrue(app.buttons["Close player"].waitForExistence(timeout: 4))
         XCTAssertTrue(app.staticTexts["The Clockwork Orchard"].exists)
+        // The copied stream fails every time here, so recovery retries it
+        // before moving to the portable stream.
+        let portableStarted = XCTNSPredicateExpectation(
+            predicate: NSPredicate { [weak self] _, _ in (self?.server?.portablePlaylistRequestCount ?? 0) > 0 },
+            object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [portableStarted], timeout: 15), .completed,
+                       "requests: \(server?.requestSummary ?? "server unavailable")")
+        let copiedGenerations = Set((server?.preparedRequests ?? []).filter { $0.videoMode == "copy" }.map(\.generation))
+        XCTAssertEqual(copiedGenerations.count, 3, "A failing copied stream gets three attempts before a format change")
         XCTAssertTrue(app.staticTexts["Preparing video…"].waitForNonExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Reconnecting video…"].waitForNonExistence(timeout: 10))
         let playbackError = app.staticTexts["Playback couldn't continue"]
         XCTAssertFalse(
             playbackError.exists,
@@ -3593,6 +3604,7 @@ private final class SyntheticHTTPServer {
         let quality: String
         let audio: String
         let start: Int
+        let videoMode: String
         var identity: String { "\(session):\(generation)" }
     }
     private let listener: NWListener
@@ -4303,7 +4315,8 @@ private final class SyntheticHTTPServer {
                 generation: Self.queryValue(named: "request", in: target).flatMap(UInt64.init) ?? 0,
                 quality: Self.queryValue(named: "quality", in: target) ?? "auto",
                 audio: Self.queryValue(named: "audio", in: target) ?? "0",
-                start: Self.queryValue(named: "start", in: target).flatMap(Int.init) ?? 0
+                start: Self.queryValue(named: "start", in: target).flatMap(Int.init) ?? 0,
+                videoMode: Self.queryValue(named: "video_mode", in: target) ?? ""
             )
             countLock.lock()
             storedPreparedRequests.append(prepared)

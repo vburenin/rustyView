@@ -242,6 +242,39 @@ a copy requires an explicit confirmation and does not remove its favorite or
 viewing history. If saved-library storage cannot be read or updated, the app
 shows a recovery action and preserves the existing files.
 
+## Apple TV
+
+rustyView also runs on Apple TV with tvOS 17 or later. It streams your library
+on the big screen with the same server connection, quality, audio, and subtitle
+preferences:
+
+- **Library, Search, My Movies, and Settings** tabs. Browse posters or folders,
+  sort, search your collection, and continue an unfinished movie from the top of
+  Library or My Movies. Press and hold a poster for more actions such as
+  favorites and Start Over.
+- **Siri Remote playback.** Click left or right to skip 10 seconds, click to show
+  the controls, and press Play/Pause at any time. On the progress bar, click
+  left or right to choose a position (holding speeds up) and click to jump there.
+  Press Back to cancel a position, hide the controls, or close the player.
+  Subtitles, audio tracks, chapters, speed, video size, and streaming quality
+  are in the player controls.
+- **Smooth streaming.** Apple TV buffers further ahead than the phone app,
+  from about 30 seconds for very high-bitrate movies up to 5 minutes, to ride
+  out Wi-Fi hiccups.
+- **Home theater picture and sound.** With Match Dynamic Range or Match Frame
+  Rate turned on in the Apple TV settings, your TV switches to the movie's
+  Dolby Vision, HDR10, or SDR mode and frame rate. With Quality set to Auto,
+  Dolby Vision Profile 8 movies keep Dolby Vision. AAC, Dolby Digital, and
+  Dolby Digital Plus soundtracks play unchanged, including Atmos in Dolby
+  Digital Plus. DTS and TrueHD soundtracks, which Apple TV cannot decode, arrive
+  as lossless audio with every channel (up to 7.1). These need an up-to-date
+  rustyDLNA server.
+
+Apple TV is a streaming-only companion: it does not download movies, and it has
+no Picture in Picture control. tvOS may clear locally kept favorites, history,
+and resume positions when the device needs storage. Enter your server details
+with the Siri Remote or an iPhone keyboard.
+
 ## Build and run
 
 Build rustyView from source with Xcode and XcodeGen on a Mac:
@@ -252,7 +285,8 @@ open rustyView.xcodeproj
 ```
 
 Select the `rustyView` scheme, choose an iPhone or iPad simulator, and press
-Run. For a physical device, configure your signing team and a unique bundle
+Run. For Apple TV, select the `rustyViewTV` scheme and an Apple TV simulator or
+a paired Apple TV. For a physical device, configure your signing team and a unique bundle
 identifier in an ignored root-level `Local.xcconfig`:
 
 ```xcconfig
@@ -277,6 +311,9 @@ the build number for each upload, then run `xcodegen generate`. Select the
 `rustyView` scheme and **Any iOS Device (arm64)** in Xcode, choose **Product →
 Archive**, and use Organizer's **Distribute App → App Store Connect** flow.
 After processing, add the build to a TestFlight group in App Store Connect.
+The Apple TV app shares the bundle identifier: add the tvOS platform to the same
+App Store Connect app, then archive the `rustyViewTV` scheme for
+**Any tvOS Device (arm64)** the same way.
 
 The app bundles `PrivacyInfo.xcprivacy` for app preferences, owned-file metadata,
 download space checks, and playback timers. Its encryption declaration covers

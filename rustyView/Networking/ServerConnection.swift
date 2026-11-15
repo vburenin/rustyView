@@ -24,7 +24,13 @@ struct ServerConnection: Equatable, Sendable {
     let password: String
 
     init(serverAddress: String, username: String, password: String) throws {
-        let trimmedAddress = serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmedAddress = serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A bare host name is how most people type an address, especially
+        // with a TV remote. HTTPS is the only accepted scheme, so assume it;
+        // an explicit scheme, including plain HTTP, is still validated below.
+        if !trimmedAddress.isEmpty, !trimmedAddress.contains("://") {
+            trimmedAddress = "https://" + trimmedAddress
+        }
         guard var components = URLComponents(string: trimmedAddress) else {
             throw ConnectionValidationError.invalidURL
         }

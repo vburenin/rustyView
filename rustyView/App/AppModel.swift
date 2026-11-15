@@ -1,14 +1,36 @@
 import Combine
 import Foundation
 
-enum AppTab: Hashable { case library, saved, downloads, settings }
+enum AppTab: Hashable { case library, search, saved, downloads, settings }
+
+#if os(iOS)
+typealias AppDownloadManager = DownloadManager
+#else
+/// Apple TV streams only, so its target omits the offline transfer runtime.
+enum AppDownloadManager {}
+#endif
+
+enum AppStorageLocation {
+    /// tvOS gives apps only purgeable local storage: Application Support cannot
+    /// be created on Apple TV hardware, so the small library indexes use Caches.
+    static var persistentRoot: URL {
+        #if os(tvOS)
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        #else
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        #endif
+    }
+}
 
 @MainActor
 final class AppModel: ObservableObject {
     let settings: AppSettings
     let client: RustyDLNAClient
     let library: LibraryModel
+    #if os(iOS)
+    /// Apple TV streams only; offline copies are an iPhone and iPad feature.
     let downloads: DownloadManager
+    #endif
     let player: PlaybackModel
     let movieCache: MovieMetadataCache
     let userLibrary: UserLibraryStore
@@ -30,7 +52,7 @@ final class AppModel: ObservableObject {
     private var savedPlaybackEpoch = 0
 
     init(settings suppliedSettings: AppSettings? = nil, client suppliedClient: RustyDLNAClient? = nil,
-         downloads suppliedDownloads: DownloadManager? = nil,
+         downloads suppliedDownloads: AppDownloadManager? = nil,
          movieCache suppliedMovieCache: MovieMetadataCache? = nil,
          userLibrary suppliedUserLibrary: UserLibraryStore? = nil,
          playbackPreferences suppliedPreferences: PlaybackPreferences? = nil) {
@@ -48,9 +70,9 @@ final class AppModel: ObservableObject {
         let client = suppliedClient ?? RustyDLNAClient()
         self.settings = settings
         self.client = client
-        var metadataDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        var metadataDirectory = AppStorageLocation.persistentRoot
             .appendingPathComponent("MovieMetadata", isDirectory: true)
-        var userLibraryDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        var userLibraryDirectory = AppStorageLocation.persistentRoot
             .appendingPathComponent("UserLibrary", isDirectory: true)
         var uiTestStorageRoot: URL?
         #if DEBUG && targetEnvironment(simulator)
@@ -79,6 +101,7 @@ final class AppModel: ObservableObject {
         playbackPreferences = suppliedPreferences ?? PlaybackPreferences(defaults: defaults)
         downloadPreferences = DownloadPreferences(defaults: defaults)
         library = LibraryModel(client: client, defaults: defaults)
+        #if os(iOS)
         if let suppliedDownloads {
             downloads = suppliedDownloads
         } else {
@@ -107,22 +130,27 @@ final class AppModel: ObservableObject {
         // OS-owned transfers must reconnect even when Keychain is unavailable
         // or the person has intentionally forgotten the connection.
         downloads.startBackgroundOwnership()
+        #endif
         player = PlaybackModel(client: client, activityStore: userLibrary, preferences: playbackPreferences)
 
-        Publishers.MergeMany([
+        var children: [AnyPublisher<Void, Never>] = [
             settings.objectWillChange.eraseToAnyPublisher(),
             library.objectWillChange.eraseToAnyPublisher(),
-            downloads.objectWillChange.eraseToAnyPublisher(),
             player.objectWillChange.eraseToAnyPublisher(),
             movieCache.objectWillChange.eraseToAnyPublisher(),
             userLibrary.objectWillChange.eraseToAnyPublisher(),
             playbackPreferences.objectWillChange.eraseToAnyPublisher(),
             downloadPreferences.objectWillChange.eraseToAnyPublisher(),
-        ])
+        ]
+        #if os(iOS)
+        children.append(downloads.objectWillChange.eraseToAnyPublisher())
+        #endif
+        Publishers.MergeMany(children)
         .receive(on: DispatchQueue.main)
         .sink { [weak self] _ in self?.objectWillChange.send() }
         .store(in: &childObservers)
 
+        #if os(iOS)
         settings.$allowCellularDownloads
             .dropFirst()
             .removeDuplicates()
@@ -130,15 +158,17 @@ final class AppModel: ObservableObject {
                 downloads?.setAllowsCellularDownloads(allowed)
             }
             .store(in: &childObservers)
+        #endif
 
         Task { [weak self] in
             guard let self else { return }
             await userLibrary.waitUntilRestored()
             await movieCache.waitUntilRestored()
+            #if os(iOS)
             await downloads.waitUntilRestored()
+            #endif
             for entry in userLibrary.entries.values where entry.movie == nil {
-                let saved = downloads.completed.filter { self.key(for: $0) == entry.key }.max { $0.completedAt < $1.completedAt }
-                if let movie = saved?.movieMetadata ?? movieCache.movie(for: entry.key) {
+                if let movie = self.bestRecordedMetadata(for: entry.key) ?? movieCache.movie(for: entry.key) {
                     userLibrary.upsertMetadata(movie, for: entry.key)
                 }
             }
@@ -210,7 +240,9 @@ final class AppModel: ObservableObject {
             player.stop()
             library.clear()
             client.configure(nil)
+            #if os(iOS)
             downloads.configure(connection: nil, statusClient: client)
+            #endif
             isConfigured = false
         } catch {
             presentedError = UserFacingError(error)
@@ -226,6 +258,7 @@ final class AppModel: ObservableObject {
         presentedError = UserFacingError(error)
     }
 
+    #if os(iOS)
     func playOffline(_ record: DownloadRecord, start: PlaybackStart = .resume) {
         savedPlaybackEpoch += 1
         let captionSources = (record.localCaptions ?? []).compactMap { caption -> LocalCaptionSource? in
@@ -277,19 +310,24 @@ final class AppModel: ObservableObject {
         subtitleCheckIDs[recordID] = nil
         subtitleChecks.remove(recordID)
     }
+    #endif
 
     func playSaved(_ key: MovieLibraryKey, start: PlaybackStart = .resume) async throws {
         savedPlaybackEpoch += 1
         let epoch = savedPlaybackEpoch
         let playerIdentity = player.requestIdentity
         await userLibrary.waitUntilRestored()
+        #if os(iOS)
         await downloads.waitUntilRestored()
+        #endif
         try Task.checkCancellation()
         guard epoch == savedPlaybackEpoch, player.requestIdentity == playerIdentity else { return }
+        #if os(iOS)
         if let record = bestReadyRecord(for: key) {
             playOffline(record, start: start)
             return
         }
+        #endif
         guard let connection = client.connection, owns(key) else { throw RustyDLNAError.notConfigured }
         let requestClient = client.connectionProbe()
         requestClient.configure(connection)
@@ -324,11 +362,24 @@ final class AppModel: ObservableObject {
     }
 
     func bestReadyRecord(for key: MovieLibraryKey) -> DownloadRecord? {
+        #if os(iOS)
         downloads.completed.filter { $0.isReadyToWatch && self.key(for: $0) == key }
             .sorted {
                 if $0.completedAt != $1.completedAt { return $0.completedAt > $1.completedAt }
                 return $0.id.uuidString < $1.id.uuidString
             }.first
+        #else
+        nil
+        #endif
+    }
+
+    /// Metadata from the newest stored copy, including copies not yet ready.
+    private func bestRecordedMetadata(for key: MovieLibraryKey) -> MovieMetadata? {
+        #if os(iOS)
+        downloads.completed.filter { self.key(for: $0) == key }.max { $0.completedAt < $1.completedAt }?.movieMetadata
+        #else
+        nil
+        #endif
     }
 
     func owns(_ key: MovieLibraryKey) -> Bool {
@@ -338,7 +389,9 @@ final class AppModel: ObservableObject {
     private func apply(_ connection: ServerConnection) {
         client.configure(connection)
         library.configureConnection(connection)
+        #if os(iOS)
         downloads.configure(connection: connection, statusClient: client)
+        #endif
         isConfigured = true
     }
 }

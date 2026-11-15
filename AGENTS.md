@@ -23,6 +23,51 @@ cohesive product rather than independent demos.
   end. It has no third-party runtime dependencies.
 - `project.yml` is the source of truth for the generated Xcode project. Run
   `xcodegen generate` after changing targets, resources, or build settings.
+- The `rustyViewTV` target (tvOS 17, same bundle identifier for a universal
+  App Store record) shares models, networking, library and playback state with
+  iOS. Its focus-engine SwiftUI views live in `rustyViewTV/`; it compiles none
+  of `rustyView/Views` except `AuthenticatedArtworkView.swift`. Apple TV streams
+  only: the target excludes `DownloadManager.swift`, `DownloadManagerRuntime.swift`
+  and the background-session app delegate, and `AppModel` owns no download
+  manager there. tvOS hardware cannot create Application Support, so
+  `AppStorageLocation` keeps the user library and metadata cache in purgeable
+  Caches; My Movies discloses that. Search has its own `LibraryModel`, so typing
+  never replaces the Library tab's folder, sort or results. Folders change in
+  place: the previous grid stays focusable and unmoved while the next loads,
+  with progress floating above it, then the new folder starts at the top with
+  its first poster focused, or a returning folder focuses the poster it was
+  left through. The grid is one full-width focus section, so Down from any
+  browse control reaches even a single poster. With no server and nothing
+  saved, the connection screen is the top-level view rather than a cover, so
+  Menu returns to the Home screen as App Review expects. tvOS declares no
+  background modes; without Picture in Picture nothing plays in the background.
+  The player is a
+  custom Siri Remote transport over `PlaybackModel`, not `AVPlayerViewController`,
+  because prepared streams restart at scrub targets on a global movie timeline
+  that the stock transport bar cannot show. Hidden controls map left/right to
+  ten-second skips and select/up/down to reveal; the focused progress bar scrubs
+  with accelerating left/right presses and seeks on select. SwiftUI's move
+  command fires once per press, so `TVDirectionalPressObserver` watches
+  left/right press-down and release from the window without consuming them: a
+  held direction keeps scrubbing with the same acceleration, and with controls
+  hidden it reveals the progress bar first. Play/Pause toggles
+  once; Menu cancels a scrub, then hides controls, then closes. Controls follow
+  pause intent rather than `isPlaying`, so buffering does not summon them.
+  `TVDisplayCriteriaBridge` requests the TV's display mode from the playing
+  item's actual video format description and the server frame rate (HLS
+  tracks report none), so Match Dynamic Range/Frame Rate work with the custom
+  `AVPlayerLayer` player; closing the player withdraws the request. A copied
+  Dolby Vision Profile 8 stream carries `dvvC` in its `hvc1` entry (server
+  `reason=native_ios` copies) and selects Dolby Vision; PQ selects HDR10.
+  `PreparedAudioDelivery.native` (tvOS default) copies AAC/AC-3/E-AC-3, keeping
+  E-AC-3 Atmos, and asks for `audio_output=flac` (lossless 48 kHz/24-bit, every
+  channel in standard 7.1 order) for other codecs when the item advertises
+  `prepared_audio_outputs`. iOS streaming, Maximum Compatibility, and all
+  downloads keep the server's stereo AAC.
+  `PlaybackBufferPolicy` gives tvOS online items a forward buffer sized from a
+  512 MiB budget and the estimated stream bitrate (30–300 seconds); iOS keeps
+  AVFoundation's automatic buffering. tvOS brand assets are generated from the
+  iOS icon by `scripts/generate_tvos_brand_assets.py`.
 - `AppModel` owns connection settings, the API client, browsing state, cached
   movie metadata, the user library, playback preferences, playback, and downloads.
   It deliberately forwards each child model's change publisher
@@ -54,6 +99,14 @@ cohesive product rather than independent demos.
   moving seek windows: a scrub outside the advertised window starts a fresh
   prepared stream at the requested global time. A bounded startup watchdog
   retries or falls back instead of leaving the player stuck on Preparing.
+  A scrub cancels the replaced generation on the server immediately, so that
+  stream's failures while the restart is pending are ignored rather than
+  charged to its format. `PlaybackRecoveryPolicy` retries a failed prepared
+  format in place with backoff (three attempts, or six for a format that
+  already advanced in this viewing; the count resets whenever playback
+  advances) before the ladder copy → HDR10 encode → SDR moves on. Once HDR
+  has advanced in a viewing, automatic recovery never steps to SDR; it stops
+  with Retry, and Maximum Compatibility remains an explicit choice.
   Each viewing session retains its original connection, a stable server session
   and increasing prepared generations. Replacement/close cancels the exact old
   generation; a bounded heartbeat retains paused/buffered prepared output.
@@ -649,6 +702,17 @@ Treat the manually operated `iPhone 17` Simulator as the owner's current-build
 preview: after a verified app change, install and launch the new build there
 when doing so will not interrupt an active download. Preserve its app data
 across installs. It is not an automation destination.
+
+Apple TV changes build the `rustyViewTV` scheme and run its Siri Remote journey
+only on the dedicated `rustyView Test Apple TV` Simulator (Apple TV 4K, 1080p).
+Shared model or playback changes still need the relevant iOS unit tests:
+
+```sh
+xcodebuild -project rustyView.xcodeproj -scheme rustyViewTV \
+  -destination 'generic/platform=tvOS Simulator' build
+xcodebuild -project rustyView.xcodeproj -scheme rustyViewTV \
+  -destination 'platform=tvOS Simulator,name=rustyView Test Apple TV' test
+```
 
 The real background and native-media TLS origin checks need the generated fixture
 server running on the Mac. After building and installing the app on the booted

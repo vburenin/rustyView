@@ -199,6 +199,9 @@ struct MediaItem: Codable, Identifiable, Hashable, Sendable {
     let fallbackURL: String
     let transcodeLikely: Bool
     var preparedVideoOutputs: [String]? = nil
+    /// Transcoded audio outputs this server can produce, such as "flac".
+    /// Absent from servers that only convert to AAC.
+    var preparedAudioOutputs: [String]? = nil
 
     enum CodingKeys: String, CodingKey {
         case embeddedCaptionsComplete = "embedded_captions_complete"
@@ -227,6 +230,7 @@ struct MediaItem: Codable, Identifiable, Hashable, Sendable {
         case fallbackURL = "fallback_url"
         case transcodeLikely = "transcode_likely"
         case preparedVideoOutputs = "prepared_video_outputs"
+        case preparedAudioOutputs = "prepared_audio_outputs"
     }
 }
 

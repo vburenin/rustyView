@@ -308,13 +308,18 @@ final class RustyDLNAClient {
         forceVideoTranscode: Bool = false,
         preparedIdentity: PreparedPlaybackIdentity? = nil,
         preserveHDR: Bool = true,
-        downloadAudio: DownloadAudioSelection? = nil
+        downloadAudio: DownloadAudioSelection? = nil,
+        audioDelivery: PreparedAudioDelivery = .aac
     ) -> String {
         // A non-Auto quality is a resolution/bitrate constraint. Copying the
         // source cannot satisfy that constraint, so it must use a video encode.
         let output = CompatibleOutputPlan(item: item, quality: quality, audioIndex: audioIndex,
                                           forceVideoTranscode: forceVideoTranscode, preserveHDR: preserveHDR)
         let video = output.videoMode
+        // Offline copies keep their own per-track audio contract.
+        let audio = downloadAudio == nil
+            ? audioDelivery.request(for: item, audioIndex: output.audioIndex)
+            : PreparedAudioDelivery.Request(mode: "transcode", output: nil)
         var components = URLComponents(string: item.fallbackURL) ?? URLComponents()
         if delivery == "hls" {
             components.path = components.path.replacingOccurrences(of: ".mp4", with: ".m3u8")
@@ -326,12 +331,13 @@ final class RustyDLNAClient {
             URLQueryItem(name: "start", value: String(max(0, startSeconds))),
             URLQueryItem(name: "quality", value: quality),
             URLQueryItem(name: "video_mode", value: video),
-            URLQueryItem(name: "audio_mode", value: "transcode"),
+            URLQueryItem(name: "audio_mode", value: audio.mode),
             URLQueryItem(name: "reason", value: "native_ios"),
             URLQueryItem(name: "request", value: String(preparedIdentity?.generation ?? requestID)),
             URLQueryItem(name: "session", value: String(preparedIdentity?.session ?? requestID)),
         ]
         if let videoOutput = output.videoOutput { queryItems.append(URLQueryItem(name: "video_output", value: videoOutput)) }
+        if let audioOutput = audio.output { queryItems.append(URLQueryItem(name: "audio_output", value: audioOutput)) }
         if let downloadAudio { queryItems.append(URLQueryItem(name: "download_audio", value: downloadAudio.rawValue)) }
         if delivery != "mp4" { queryItems.append(URLQueryItem(name: "delivery", value: delivery)) }
         components.queryItems = queryItems
@@ -413,6 +419,42 @@ final class RustyDLNAClient {
 private struct SchemaEnvelope: Decodable {
     let schemaVersion: Int
     enum CodingKeys: String, CodingKey { case schemaVersion = "schema_version" }
+}
+
+/// How a prepared stream delivers the selected audio track.
+enum PreparedAudioDelivery: Equatable, Sendable {
+    /// The server's AAC conversion: a stereo downmix that every device plays.
+    case aac
+    /// For a home theater. Codecs the device decodes itself are copied
+    /// unchanged, which keeps Dolby Atmos in E-AC-3. Anything else, such as
+    /// DTS or TrueHD, becomes lossless FLAC with every channel when the server
+    /// offers it, because Apple TV decodes all audio to PCM anyway.
+    case native
+
+    struct Request: Equatable {
+        let mode: String
+        let output: String?
+    }
+
+    /// Codecs AVFoundation on Apple TV plays from fragmented-MP4 HLS.
+    static let copiedCodecs: Set<String> = ["aac", "ac3", "eac3"]
+
+    static var platformDefault: PreparedAudioDelivery {
+        #if os(tvOS)
+        .native
+        #else
+        .aac
+        #endif
+    }
+
+    func request(for item: MediaItem, audioIndex: Int) -> Request {
+        guard self == .native,
+              let codec = item.audioTracks.first(where: { $0.index == audioIndex })?.codec.lowercased()
+        else { return Request(mode: "transcode", output: nil) }
+        if Self.copiedCodecs.contains(codec) { return Request(mode: "copy", output: nil) }
+        if item.preparedAudioOutputs?.contains("flac") == true { return Request(mode: "transcode", output: "flac") }
+        return Request(mode: "transcode", output: nil)
+    }
 }
 
 enum PlaybackCompatibility {

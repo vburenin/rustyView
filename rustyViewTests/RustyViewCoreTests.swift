@@ -87,6 +87,23 @@ final class ServerConnectionTests: XCTestCase {
         }
     }
 
+    func testBareHostAssumesHTTPSAndMatchesTheExplicitAddress() throws {
+        let explicit = try ServerConnection(serverAddress: "https://media.example.test/library", username: "viewer", password: "")
+        for typed in ["media.example.test/library", "  Media.Example.test/library/ ", "media.example.test:443/library"] {
+            let bare = try ServerConnection(serverAddress: typed, username: "viewer", password: "")
+            XCTAssertEqual(bare.baseURL, explicit.baseURL, typed)
+            XCTAssertEqual(bare.serverIdentity, explicit.serverIdentity, "A saved account must not split by spelling")
+        }
+        XCTAssertEqual(try ServerConnection(serverAddress: "media.example.test:8443", username: "viewer", password: "")
+            .baseURL.absoluteString, "https://media.example.test:8443")
+        XCTAssertThrowsError(try ServerConnection(serverAddress: "http://media.example.test", username: "viewer", password: "")) {
+            XCTAssertEqual($0 as? ConnectionValidationError, .insecureURL, "An explicit insecure scheme is never upgraded silently")
+        }
+        XCTAssertThrowsError(try ServerConnection(serverAddress: "viewer:secret@media.example.test", username: "viewer", password: "")) {
+            XCTAssertEqual($0 as? ConnectionValidationError, .invalidURL, "Embedded credentials stay rejected")
+        }
+    }
+
     func testAuthorizationHeaderUsesExactUTF8Credentials() throws {
         let connection = try ServerConnection(
             serverAddress: "https://media.example.test",
@@ -777,6 +794,59 @@ final class PlaybackCompatibilityTests: XCTestCase {
         let offline = try XCTUnwrap(URLComponents(string: offlinePath))
         XCTAssertEqual(offline.path, "/web/media/42001.mp4")
         XCTAssertNil(offline.queryItems?.first(where: { $0.name == "delivery" }))
+    }
+
+    func testAppleTVAudioCopiesNativeCodecsAndAsksForLosslessFLACOtherwise() throws {
+        let client = RustyDLNAClient(configuration: .ephemeral)
+        client.configure(try ServerConnection(
+            serverAddress: "https://media.example.test",
+            username: "viewer",
+            password: "secret"
+        ))
+        let advertisesFLAC = #""transcode_likely": true, "prepared_audio_outputs": ["aac", "flac"]"#
+        // Track 0 is the fixture's AAC dub; track 1 is its default DTS 5.1.
+        func audioQuery(_ item: MediaItem, track: Int, delivery: PreparedAudioDelivery,
+                        download: DownloadAudioSelection? = nil) throws -> (mode: String?, output: String?) {
+            let path = client.compatiblePath(for: item, delivery: download == nil ? "hls" : "mp4", audioIndex: track,
+                                             downloadAudio: download, audioDelivery: delivery)
+            let items = try XCTUnwrap(URLComponents(string: path)?.queryItems)
+            XCTAssertEqual(items.filter { $0.name == "audio" }.map(\.value), [String(track)])
+            return (items.first { $0.name == "audio_mode" }?.value, items.first { $0.name == "audio_output" }?.value)
+        }
+
+        let current = try Self.decodeItem(replacing: #""transcode_likely": true"#, with: advertisesFLAC)
+        XCTAssertEqual(current.preparedAudioOutputs, ["aac", "flac"])
+        let copied = try audioQuery(current, track: 0, delivery: .native)
+        XCTAssertEqual(copied.mode, "copy", "Apple TV plays AAC as-is")
+        XCTAssertNil(copied.output)
+        let lossless = try audioQuery(current, track: 1, delivery: .native)
+        XCTAssertEqual(lossless.mode, "transcode")
+        XCTAssertEqual(lossless.output, "flac", "DTS becomes lossless multichannel FLAC")
+        for (codec, expected) in [("ac3", "copy"), ("eac3", "copy"), ("truehd", "flac"), ("opus", "flac")] {
+            let item = try Self.decodeItem(replacing: #""codec": "aac", "content_type": "audio/mp4; codecs=\"mp4a.40.2\"""#,
+                                           with: #""codec": "\#(codec)", "content_type": null"#)
+            var withFLAC = item
+            withFLAC.preparedAudioOutputs = ["aac", "flac"]
+            let request = try audioQuery(withFLAC, track: 0, delivery: .native)
+            XCTAssertEqual(request.output ?? request.mode, expected, codec)
+        }
+
+        // An older server converts to AAC only, so nothing new is requested.
+        let older = try Self.decodeItem()
+        XCTAssertNil(older.preparedAudioOutputs)
+        let legacy = try audioQuery(older, track: 1, delivery: .native)
+        XCTAssertEqual(legacy.mode, "transcode")
+        XCTAssertNil(legacy.output)
+
+        // iPhone/iPad streaming and every offline copy keep the AAC contract.
+        for track in [0, 1] {
+            let phone = try audioQuery(current, track: track, delivery: .aac)
+            XCTAssertEqual(phone.mode, "transcode")
+            XCTAssertNil(phone.output)
+            let offline = try audioQuery(current, track: track, delivery: .native, download: .selected)
+            XCTAssertEqual(offline.mode, "transcode")
+            XCTAssertNil(offline.output)
+        }
     }
 
     private static func decodeItem(replacing target: String? = nil, with replacement: String = "") throws -> MediaItem {

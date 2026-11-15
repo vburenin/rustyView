@@ -93,6 +93,36 @@ enum PlaybackRouting {
     }
 }
 
+/// One prepared or original stream shape within a viewing.
+struct PlaybackFormat: Hashable {
+    let attempt: PlaybackAttempt
+    let videoOutput: String?
+}
+
+/// Patience for streams that fail. A failure first retries the same format,
+/// because scrubbing, a briefly busy server or a network blip says nothing
+/// about whether the device can play it. Only repeated failures with no
+/// playback in between change the format, and once HDR has played in a
+/// viewing, automatic recovery never converts it to SDR.
+struct PlaybackRecoveryPolicy: Equatable, Sendable {
+    /// Consecutive failures a format that has not played in this viewing gets
+    /// before automatic recovery tries another format.
+    var attemptsBeforeChangingFormat = 3
+    /// Consecutive failures a format that already played in this viewing gets.
+    var attemptsForAPlayedFormat = 6
+    /// Waits before each further attempt; the last value repeats.
+    var retryDelays: [Duration] = [.milliseconds(500), .seconds(1), .seconds(2), .seconds(3), .seconds(5)]
+
+    func retriesSameFormat(afterFailures failures: Int, formatHasPlayed: Bool) -> Bool {
+        failures < (formatHasPlayed ? attemptsForAPlayedFormat : attemptsBeforeChangingFormat)
+    }
+
+    func delay(afterFailures failures: Int) -> Duration {
+        guard let last = retryDelays.last else { return .zero }
+        return retryDelays.indices.contains(failures - 1) ? retryDelays[failures - 1] : last
+    }
+}
+
 enum PlaybackTimeline {
     static func clampedTime(_ time: Double, duration: Double?) -> Double {
         let finiteTime = time.isFinite ? time : 0
@@ -205,6 +235,8 @@ final class PlaybackModel: ObservableObject {
     private let activityStore: any PlaybackActivityStore
     private let preferences: PlaybackPreferences
     private let system: PlaybackSystemController
+    private let bufferPolicy: PlaybackBufferPolicy
+    private let audioDelivery: PreparedAudioDelivery
     private var playerObservation: AnyCancellable?
     private var externalPlaybackObservation: AnyCancellable?
     private var interruptionResume: (viewingID: UUID, intentRevision: UInt64)?
@@ -239,6 +271,15 @@ final class PlaybackModel: ObservableObject {
     private var preparingAssetTask: Task<Void, Never>?
     private var startupWatchdog: Task<Void, Never>?
     private var startupRetryCount = 0
+    private let recoveryPolicy: PlaybackRecoveryPolicy
+    /// A scheduled retry of the current format after a failure.
+    private var recoveryTask: Task<Void, Never>?
+    /// Failures of the current format since playback last advanced.
+    private var formatFailures = 0
+    /// Formats that actually advanced during this viewing.
+    private var playedFormats: Set<PlaybackFormat> = []
+    /// Whether HDR video actually advanced during this viewing.
+    private var hdrPlayed = false
     private var viewingSession: PreparedPlaybackSession?
     private var localSource: (record: DownloadRecord, url: URL, captions: [LocalCaptionSource])?
     private var localTrackTask: Task<Void, Never>?
@@ -265,9 +306,15 @@ final class PlaybackModel: ObservableObject {
         preferences: PlaybackPreferences? = nil,
         systemController: PlaybackSystemController? = nil,
         progressTimeout: TimeInterval = 15,
-        watchdogInterval: Duration = .seconds(1)
+        watchdogInterval: Duration = .seconds(1),
+        bufferPolicy: PlaybackBufferPolicy = .platformDefault,
+        audioDelivery: PreparedAudioDelivery = .platformDefault,
+        recoveryPolicy: PlaybackRecoveryPolicy = PlaybackRecoveryPolicy()
     ) {
         self.client = client
+        self.bufferPolicy = bufferPolicy
+        self.recoveryPolicy = recoveryPolicy
+        self.audioDelivery = audioDelivery
         self.activityStore = activityStore ?? LegacyPlaybackActivityAdapter(progressStore: progressStore)
         self.preferences = preferences ?? PlaybackPreferences()
         self.system = systemController ?? PlaybackSystemController()
@@ -322,6 +369,7 @@ final class PlaybackModel: ObservableObject {
         if !retainingViewingSession && suppliedViewingID == nil { cancelPendingStart() }
         saveProgress()
         lastObservedPlaybackTime = nil
+        cancelScheduledRecovery()
         preparingAssetTask?.cancel()
         preparingAssetTask = nil
         startupWatchdog?.cancel()
@@ -340,6 +388,9 @@ final class PlaybackModel: ObservableObject {
             self.qualityProfiles = qualityProfiles
             forceHDRTranscode = false
             streamFormatNotice = nil
+            formatFailures = 0
+            playedFormats = []
+            hdrPlayed = false
         }
         localSource = nil
         mediaOutputPolicy = .localRelay
@@ -415,7 +466,9 @@ final class PlaybackModel: ObservableObject {
                     audioIndex: selectedAudioIndex,
                     startSeconds: Int(startPosition),
                     forceVideoTranscode: attempt == .portable || forceHDRTranscode,
-                    preserveHDR: attempt != .portable
+                    preserveHDR: attempt != .portable,
+                    // Maximum compatibility keeps the stereo AAC every device plays.
+                    audioDelivery: attempt == .portable ? .aac : audioDelivery
                 )
             } else {
                 activeVideoOutput = nil
@@ -447,6 +500,9 @@ final class PlaybackModel: ObservableObject {
                         return
                     }
                     let playerItem = AVPlayerItem(asset: asset.asset)
+                    let profile = usesCompatibleStream ? self.qualityProfiles?.first { $0.id == quality } : nil
+                    playerItem.preferredForwardBufferDuration = self.bufferPolicy.forwardBufferDuration(
+                        bitsPerSecond: PlaybackBufferPolicy.estimatedBitsPerSecond(item: item, profile: profile))
                     self.observe(playerItem, session: session, initialSeek: usesCompatibleStream ? nil : self.currentTime)
                     self.player.replaceCurrentItem(with: playerItem)
                     self.loadLocalTracks(playerItem, session: session)
@@ -551,6 +607,8 @@ final class PlaybackModel: ObservableObject {
     func retryCurrentPlayback() {
         let position = globalTime
         let retainedIntent = intent
+        // An explicit Retry earns the current format a fresh set of attempts.
+        formatFailures = 0
         if let item {
             play(
                 item, mode: mode, quality: selectedQuality, audioIndex: selectedAudioIndex,
@@ -568,6 +626,7 @@ final class PlaybackModel: ObservableObject {
         guard draft.isValid(in: profiles), let item else { return false }
         preferences.preferredQualityID = draft.quality
         qualityNotice = nil
+        formatFailures = 0
         play(item, mode: draft.mode, quality: draft.quality, audioIndex: selectedAudioIndex, startAt: globalTime,
              retainingViewingSession: true, preservingIntent: intent)
         return true
@@ -587,6 +646,7 @@ final class PlaybackModel: ObservableObject {
         saveProgress()
         selectedAudioIndex = index
         preferences.preferredAudioLanguage = item.audioTracks.first { $0.index == index }?.language
+        formatFailures = 0
         let selectedMode: PlaybackMode = activeAttempt == .portable ? .portable : .compatible
         play(
             item,
@@ -672,6 +732,8 @@ final class PlaybackModel: ObservableObject {
 
     func seek(toGlobalTime target: Double) {
         lastObservedPlaybackTime = nil
+        // The seek's own restart replaces a stream waiting to be retried.
+        cancelScheduledRecovery()
         let target = PlaybackTimeline.clampedTime(target, duration: duration > 0 ? duration : nil)
         pendingSeek?.cancel()
         pendingSeek = nil
@@ -911,6 +973,7 @@ final class PlaybackModel: ObservableObject {
         activityViewingID suppliedViewingID: UUID? = nil
     ) {
         if !retainingViewingID && suppliedViewingID == nil { cancelPendingStart() }
+        cancelScheduledRecovery()
         preparingAssetTask?.cancel()
         preparingAssetTask = nil
         saveProgress()
@@ -1136,6 +1199,7 @@ final class PlaybackModel: ObservableObject {
     }
 
     func stop() {
+        cancelScheduledRecovery()
         preparingAssetTask?.cancel()
         preparingAssetTask = nil
         cancelPendingStart()
@@ -1661,6 +1725,7 @@ final class PlaybackModel: ObservableObject {
         if transport.progressed != progressWatchdog.hasProgressed {
             transport.progressed = progressWatchdog.hasProgressed
         }
+        if progressWatchdog.hasProgressed { notePlaybackAdvanced() }
         if stalled {
             handlePlaybackFailure(
                 transport.progressed ? "Playback stopped receiving video. Check your connection and retry."
@@ -1674,6 +1739,11 @@ final class PlaybackModel: ObservableObject {
 
     private func handlePlaybackFailure(_ message: String, session: UUID) {
         guard currentSession == session, errorMessage == nil else { return }
+        // A scrub outside the prepared window has already cancelled this
+        // stream on the server and is about to replace it, so its playlist
+        // refreshes now fail by design. A scheduled retry has detached the
+        // failed item. Neither says anything about whether the format plays.
+        guard pendingSeek == nil, recoveryTask == nil else { return }
         if let rejection = authenticatedAsset?.rejection, rejection.category == .transportSecurity {
             finishWithFailure(rejection.message)
             return
@@ -1700,8 +1770,21 @@ final class PlaybackModel: ObservableObject {
             finishWithFailure(message)
             return
         }
+        if activeAttempt != .original {
+            formatFailures += 1
+            if recoveryPolicy.retriesSameFormat(afterFailures: formatFailures,
+                                                formatHasPlayed: playedFormats.contains(activeFormat)) {
+                scheduleSameFormatRetry(item, position: position)
+                return
+            }
+            formatFailures = 0
+        }
         if automaticFallbackEnabled, activeAttempt == .compatible {
             if activeVideoOutput == "hevc_hdr10" {
+                if automaticStepLosesPlayedHDR(item, to: .portable, forcingHDRTranscode: false) {
+                    finishInsteadOfDroppingHDR(item, position: position)
+                    return
+                }
                 play(item, mode: .portable, quality: selectedQuality, audioIndex: selectedAudioIndex,
                      startAt: position, continuingAutomaticFallback: true, retainingViewingSession: true,
                      preservingIntent: retainedIntent)
@@ -1725,6 +1808,10 @@ final class PlaybackModel: ObservableObject {
         )
         switch action {
         case .fallback(let nextAttempt):
+            if automaticStepLosesPlayedHDR(item, to: nextAttempt, forcingHDRTranscode: forceHDRTranscode) {
+                finishInsteadOfDroppingHDR(item, position: position)
+                return
+            }
             play(
                 item,
                 mode: nextAttempt == .portable ? .portable : .compatible,
@@ -1749,7 +1836,91 @@ final class PlaybackModel: ObservableObject {
         }
     }
 
+    private var activeFormat: PlaybackFormat {
+        PlaybackFormat(attempt: activeAttempt, videoOutput: activeVideoOutput)
+    }
+
+    /// Playback advanced, so the current format works on this device: its
+    /// failure count starts over and a later failure gets the larger budget.
+    private func notePlaybackAdvanced() {
+        formatFailures = 0
+        playedFormats.insert(activeFormat)
+        if let item, streamKeepsHDR(item, attempt: activeAttempt, videoOutput: activeVideoOutput) { hdrPlayed = true }
+    }
+
+    private func streamKeepsHDR(_ item: MediaItem, attempt: PlaybackAttempt, videoOutput: String?) -> Bool {
+        guard !item.hdr.isEmpty, item.hdr.lowercased() != "sdr" else { return false }
+        switch attempt {
+        case .original: return true
+        case .portable: return false
+        case .compatible:
+            if let videoOutput { return videoOutput == "hevc_hdr10" }
+            return PlaybackCompatibility.videoMode(for: item) == "copy"
+        }
+    }
+
+    /// Whether an automatic step to `attempt` would replace HDR that already
+    /// played in this viewing with SDR. Explicit choices are never blocked.
+    private func automaticStepLosesPlayedHDR(_ item: MediaItem, to attempt: PlaybackAttempt, forcingHDRTranscode: Bool) -> Bool {
+        guard hdrPlayed else { return false }
+        let output = attempt == .original ? nil : CompatibleOutputPlan(
+            item: item, quality: selectedQuality, audioIndex: selectedAudioIndex,
+            forceVideoTranscode: attempt == .portable || forcingHDRTranscode, preserveHDR: attempt != .portable
+        ).videoOutput
+        return !streamKeepsHDR(item, attempt: attempt, videoOutput: output)
+    }
+
+    private func finishInsteadOfDroppingHDR(_ item: MediaItem, position: Double) {
+        currentTime = position
+        let sdrOffered = PlaybackRouting.nextFallback(
+            after: activeAttempt, videoMode: PlaybackCompatibility.videoMode(for: item)) == .portable
+        finishWithFailure("Playback stopped several times, so it paused here instead of switching to SDR. Retry continues in HDR."
+            + (sdrOffered ? " Maximum Compatibility plays in SDR." : ""))
+    }
+
+    /// Retries the current format after a short wait. The failed item is
+    /// detached first so its late errors cannot count as further failures.
+    private func scheduleSameFormatRetry(_ item: MediaItem, position: Double) {
+        let attempt = formatFailures
+        let delay = recoveryPolicy.delay(afterFailures: attempt)
+        preparingAssetTask?.cancel()
+        preparingAssetTask = nil
+        itemObservations.removeAll()
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        authenticatedAsset?.stop()
+        authenticatedAsset = nil
+        viewingSession?.cancelActive()
+        currentTime = position
+        isPreparing = true
+        isPlaying = false
+        isBuffering = false
+        preparationMessage = "Reconnecting video…"
+        transport.recoveryAttempt = attempt
+        refreshTransportPhase()
+        publishNowPlaying()
+        let session = currentSession
+        recoveryTask = Task { [weak self] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            guard let self, self.currentSession == session else { return }
+            self.recoveryTask = nil
+            // A seek made while waiting restarts the stream itself.
+            guard self.pendingSeek == nil else { return }
+            self.play(
+                item, mode: self.mode, quality: self.selectedQuality, audioIndex: self.selectedAudioIndex,
+                startAt: self.currentTime, continuingAutomaticFallback: self.automaticFallbackEnabled,
+                startupRetryCount: attempt, retainingViewingSession: true, preservingIntent: self.intent
+            )
+        }
+    }
+
+    private func cancelScheduledRecovery() {
+        recoveryTask?.cancel()
+        recoveryTask = nil
+    }
+
     private func finishWithFailure(_ message: String) {
+        cancelScheduledRecovery()
         preparingAssetTask?.cancel()
         preparingAssetTask = nil
         pausedPlaybackFailure = nil
@@ -1778,6 +1949,7 @@ final class PlaybackModel: ObservableObject {
     }
 
     deinit {
+        recoveryTask?.cancel()
         preparingAssetTask?.cancel()
         captionLoadTask?.cancel()
         captionWindowTask?.cancel()

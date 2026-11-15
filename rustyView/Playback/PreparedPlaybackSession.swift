@@ -29,7 +29,8 @@ final class PreparedPlaybackSession {
         audioIndex: Int?,
         startSeconds: Int,
         forceVideoTranscode: Bool,
-        preserveHDR: Bool = true
+        preserveHDR: Bool = true,
+        audioDelivery: PreparedAudioDelivery = .aac
     ) -> String {
         cancelActive()
         generation += 1
@@ -40,7 +41,8 @@ final class PreparedPlaybackSession {
             startSeconds: startSeconds,
             forceVideoTranscode: forceVideoTranscode,
             preparedIdentity: PreparedPlaybackIdentity(session: sessionID, generation: generation),
-            preserveHDR: preserveHDR
+            preserveHDR: preserveHDR,
+            audioDelivery: audioDelivery
         )
         activePath = path
         let client = client

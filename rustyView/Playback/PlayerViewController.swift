@@ -17,13 +17,14 @@ enum VideoResizeMode: String, CaseIterable, Identifiable {
 struct PlayerVideoView: UIViewRepresentable {
     let player: AVPlayer
     let resizeMode: VideoResizeMode
-    let pictureInPicture: PlayerPictureInPictureController
+    /// Apple TV presents its own player without a Picture in Picture control.
+    let pictureInPicture: PlayerPictureInPictureController?
 
     func makeUIView(context: Context) -> PlayerLayerView {
         let view = PlayerLayerView()
         view.playerLayer.player = player
         view.playerLayer.videoGravity = resizeMode.gravity
-        pictureInPicture.connect(to: view.playerLayer)
+        pictureInPicture?.connect(to: view.playerLayer)
         return view
     }
 
@@ -57,7 +58,9 @@ final class PlayerPictureInPictureController: NSObject, ObservableObject {
         else { return }
 
         controller.delegate = self
+        #if os(iOS)
         controller.canStartPictureInPictureAutomaticallyFromInline = allowsAutomaticStart
+        #endif
         self.controller = controller
         possibilityObservation = controller.observe(
             \.isPictureInPicturePossible,
@@ -83,7 +86,9 @@ final class PlayerPictureInPictureController: NSObject, ObservableObject {
 
     func setAllowsAutomaticStart(_ allowed: Bool) {
         allowsAutomaticStart = allowed
+        #if os(iOS)
         controller?.canStartPictureInPictureAutomaticallyFromInline = allowed
+        #endif
     }
 
     func stop() { controller?.stopPictureInPicture() }
